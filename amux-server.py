@@ -5633,6 +5633,25 @@ class CCHandler(BaseHTTPRequestHandler):
                 _icon_cache[size] = _generate_icon_png(size)
             return self._raw(_icon_cache[size], "image/png", cache=True)
 
+        # GET /ca — serve mkcert root CA for device trust installation
+        if method == "GET" and path == "/ca":
+            import subprocess as _sp
+            try:
+                ca_root = _sp.run(["mkcert", "-CAROOT"], capture_output=True, text=True, timeout=5).stdout.strip()
+                ca_file = Path(ca_root) / "rootCA.pem"
+                if ca_file.exists():
+                    body = ca_file.read_bytes()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/x-pem-file")
+                    self.send_header("Content-Disposition", 'attachment; filename="amux-ca.pem"')
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+            except Exception:
+                pass
+            return self._json({"error": "CA not found"}, 404)
+
         # GET /api/events (SSE stream)
         if method == "GET" and path == "/api/events":
             return self._sse_events()
