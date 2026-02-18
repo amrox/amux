@@ -876,6 +876,36 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     background: rgba(139,148,158,0.15); color: var(--dim);
     font-weight: 600; text-transform: uppercase; margin-left: 6px;
   }
+
+  /* Offline banner */
+  .offline-banner {
+    display: none; background: rgba(248,113,113,0.08);
+    border: 1px solid rgba(248,113,113,0.25); border-radius: 10px;
+    padding: 10px 14px; margin: 0 0 12px 0;
+  }
+  .offline-banner.active { display: block; }
+  .offline-banner-header {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 0.82rem; font-weight: 600; color: #f87171;
+  }
+  .offline-banner-header .sync-btn {
+    font-size: 0.72rem; padding: 3px 10px; border-radius: 6px;
+    background: rgba(248,113,113,0.15); color: #f87171; border: 1px solid rgba(248,113,113,0.3);
+    cursor: pointer; font-weight: 600;
+  }
+  .offline-banner-header .sync-btn:active { opacity: 0.7; }
+  .offline-queue-ops {
+    margin-top: 8px; display: flex; flex-direction: column; gap: 4px;
+  }
+  .offline-op {
+    font-size: 0.72rem; color: var(--dim); padding: 4px 8px;
+    background: rgba(139,148,158,0.06); border-radius: 5px;
+    font-family: "SF Mono", "Menlo", monospace;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .offline-op .op-action { color: var(--text); font-weight: 500; }
+  .offline-op .op-time { color: var(--yellow); font-size: 0.65rem; }
+  .offline-op .op-stale { color: var(--red); font-size: 0.65rem; font-style: italic; }
 </style>
 </head>
 <body>
@@ -907,6 +937,13 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 <div id="tag-filters" class="tag-filters"></div>
+<div id="offline-banner" class="offline-banner">
+  <div class="offline-banner-header">
+    <span id="offline-banner-title">&#x26A0; Offline</span>
+    <button class="sync-btn" onclick="forceRetry()">Retry now</button>
+  </div>
+  <div id="offline-ops" class="offline-queue-ops"></div>
+</div>
 <div id="cards" class="cards"></div>
 
 <!-- Create session modal -->
@@ -1063,6 +1100,33 @@ function showToast(msg) {
   toastTimer = setTimeout(() => el.classList.remove('visible'), 3000);
 }
 
+// Describe a queued operation in human-readable form
+function describeOp(item) {
+  const url = item.url || '';
+  const method = (item.options && item.options.method) || 'GET';
+  // Parse: /api/sessions/<name>/<action>
+  const m = url.match(/\/api\/sessions\/([^/]+)(?:\/(\w+))?/);
+  if (!m) return method + ' ' + url;
+  const name = decodeURIComponent(m[1]);
+  const action = m[2] || '';
+  if (action === 'start') return 'Start ' + name;
+  if (action === 'stop') return 'Stop ' + name;
+  if (action === 'send') {
+    let text = '';
+    try { text = JSON.parse(item.options.body).text || ''; } catch(e) {}
+    const preview = text.length > 30 ? text.slice(0, 30) + '...' : text;
+    return 'Send to ' + name + (preview ? ': ' + preview : '');
+  }
+  if (action === 'keys') return 'Keys to ' + name;
+  if (action === 'delete') return 'Delete ' + name;
+  if (action === 'clear') return 'Clear ' + name;
+  if (action === 'config') return 'Update ' + name;
+  if (action === 'duplicate') return 'Duplicate ' + name;
+  if (action === 'clone') return 'Clone ' + name;
+  if (!action && method === 'POST') return 'Create ' + name;
+  return method + ' ' + name + (action ? '/' + action : '');
+}
+
 // Connection status
 function updateConnectionStatus() {
   const el = document.getElementById('conn-status');
@@ -1075,6 +1139,26 @@ function updateConnectionStatus() {
     el.className = 'conn-status offline';
     el.innerHTML = '&#x25CF; Offline' + (n ? ' (' + n + ' queued)' : '');
   }
+  // Update offline banner
+  const banner = document.getElementById('offline-banner');
+  const ops = document.getElementById('offline-ops');
+  const title = document.getElementById('offline-banner-title');
+  if (!banner) return;
+  if (online || !offlineQueue.length) {
+    banner.classList.remove('active');
+    return;
+  }
+  banner.classList.add('active');
+  const n = offlineQueue.length;
+  title.innerHTML = '&#x26A0; Offline &mdash; ' + n + ' operation' + (n === 1 ? '' : 's') + ' queued';
+  ops.innerHTML = offlineQueue.map(item => {
+    const age = Math.floor((Date.now() - item.timestamp) / 60000);
+    const timeStr = age < 1 ? 'just now' : age + 'm ago';
+    return '<div class="offline-op">' +
+      '<span class="op-action">' + esc(describeOp(item)) + '</span>' +
+      '<span class="op-time">' + timeStr + '</span>' +
+    '</div>';
+  }).join('');
 }
 
 function setOnline(val) {
@@ -1098,7 +1182,7 @@ function showQueueModal() {
   } else {
     el.innerHTML = offlineQueue.map((item, i) =>
       '<div class="queue-item">' +
-        esc(item.options && item.options.method ? item.options.method : 'GET') + ' ' + esc(item.url) +
+        esc(describeOp(item)) +
         '<br><span class="queue-time">' + new Date(item.timestamp).toLocaleTimeString() + '</span>' +
       '</div>'
     ).join('');
@@ -1148,32 +1232,66 @@ async function apiCall(url, options) {
   }
 }
 
+// Reconcile queue: remove contradictory/stale operations before replay
+function reconcileQueue(queue) {
+  // Walk backwards and track the last action per session to skip superseded ops
+  const lastAction = {};  // session -> last action seen
+  const dominated = new Set();  // indices to skip
+  for (let i = queue.length - 1; i >= 0; i--) {
+    const m = (queue[i].url || '').match(/\/api\/sessions\/([^/]+)(?:\/(\w+))?/);
+    if (!m) continue;
+    const session = m[1];
+    const action = m[2] || 'create';
+    const key = session;
+    if (!lastAction[key]) {
+      lastAction[key] = action;
+    } else {
+      // Skip start if a later stop exists for same session (and vice versa)
+      if ((action === 'start' && lastAction[key] === 'stop') ||
+          (action === 'stop' && lastAction[key] === 'start')) {
+        dominated.add(i);
+      }
+      // Skip delete if session was already created then deleted
+      if (action === 'create' && lastAction[key] === 'delete') {
+        dominated.add(i);
+      }
+    }
+  }
+  return queue.filter((_, i) => !dominated.has(i));
+}
+
 // Queue replay on reconnect
 async function replayQueue() {
   if (!offlineQueue.length) return;
-  const queue = [...offlineQueue];
+  const raw = [...offlineQueue];
   offlineQueue = [];
   localStorage.removeItem('cc_offline_queue');
-  let requeued = 0;
-  showToast('Replaying ' + queue.length + ' queued operations...');
+  // Reconcile before replaying
+  const queue = reconcileQueue(raw);
+  const skipped = raw.length - queue.length;
+  if (skipped) showToast('Skipped ' + skipped + ' superseded ops');
+  showToast('Syncing ' + queue.length + ' operation' + (queue.length === 1 ? '' : 's') + '...');
+  let synced = 0, failed = 0;
   for (const item of queue) {
     try {
       const r = await fetch(item.url, item.options);
       if (r.status >= 500) {
         offlineQueue.push(item);
-        requeued++;
+        failed++;
+      } else {
+        synced++;
       }
-      // 4xx = stale, discard silently
+      // 4xx = stale, discard silently (session gone, etc.)
     } catch(e) {
       offlineQueue.push(item);
-      requeued++;
+      failed++;
     }
   }
-  if (requeued) {
+  if (failed) {
     localStorage.setItem('cc_offline_queue', JSON.stringify(offlineQueue));
-    showToast(requeued + ' operations re-queued (server errors)');
+    showToast(synced + ' synced, ' + failed + ' re-queued');
   } else {
-    showToast('All queued operations synced');
+    showToast('All ' + synced + ' operation' + (synced === 1 ? '' : 's') + ' synced');
   }
   updateConnectionStatus();
   fetchSessions();
