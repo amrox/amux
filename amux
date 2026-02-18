@@ -6,11 +6,16 @@ set -euo pipefail
 
 CC_VERSION="0.3.0"
 
-# ── Migration from cc → amux ────────────────────────────────────────────────
-# Migrate ~/.cc → ~/.amux if old dir exists and new one doesn't
-if [[ -d "$HOME/.cc" && ! -d "$HOME/.amux" ]]; then
-  mv "$HOME/.cc" "$HOME/.amux"
-  echo "Migrated ~/.cc → ~/.amux"
+# ── Migration from cc/cmux → amux ───────────────────────────────────────────
+# Migrate legacy dirs to ~/.amux if new one doesn't exist
+if [[ ! -d "$HOME/.amux" ]]; then
+  for _old in "$HOME/.cmux" "$HOME/.cc"; do
+    if [[ -d "$_old" ]]; then
+      mv "$_old" "$HOME/.amux"
+      echo "Migrated $_old → ~/.amux"
+      break
+    fi
+  done
 fi
 
 CC_HOME="${CC_HOME:-$HOME/.amux}"

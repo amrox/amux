@@ -19,11 +19,12 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
-# Support both ~/.amux (new) and ~/.cc (old) for migration
+# Support both ~/.amux (new) and legacy dirs for migration
 _amux_home = Path.home() / ".amux"
-_cc_home = Path.home() / ".cc"
-if not _amux_home.exists() and _cc_home.exists():
-    _cc_home.rename(_amux_home)
+for _old_home in [Path.home() / ".cmux", Path.home() / ".cc"]:
+    if not _amux_home.exists() and _old_home.exists():
+        _old_home.rename(_amux_home)
+        break
 CC_HOME = Path(os.environ.get("CC_HOME", _amux_home))
 CC_SESSIONS = CC_HOME / "sessions"
 CC_LOGS = CC_HOME / "logs"
