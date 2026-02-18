@@ -5529,9 +5529,15 @@ class CCHandler(BaseHTTPRequestHandler):
         # Quieter logging: just method + path
         sys.stderr.write(f"  {args[0]}\n")
 
+    def _cors(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
     def _json(self, data, status=200):
         body = json.dumps(data).encode()
         self.send_response(status)
+        self._cors()
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -5540,6 +5546,7 @@ class CCHandler(BaseHTTPRequestHandler):
     def _html(self, html):
         body = html.encode()
         self.send_response(200)
+        self._cors()
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -5547,6 +5554,7 @@ class CCHandler(BaseHTTPRequestHandler):
 
     def _raw(self, body: bytes, content_type: str, cache=False):
         self.send_response(200)
+        self._cors()
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         if cache:
@@ -5642,6 +5650,7 @@ class CCHandler(BaseHTTPRequestHandler):
                 if ca_file.exists():
                     body = ca_file.read_bytes()
                     self.send_response(200)
+                    self._cors()
                     self.send_header("Content-Type", "application/x-pem-file")
                     self.send_header("Content-Disposition", 'attachment; filename="amux-ca.pem"')
                     self.send_header("Content-Length", str(len(body)))
@@ -6136,6 +6145,12 @@ class CCHandler(BaseHTTPRequestHandler):
             return self._json({"error": "not found"}, 404)
 
         return self._json({"error": "method not allowed"}, 405)
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self._cors()
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def do_GET(self):
         self._route("GET")
