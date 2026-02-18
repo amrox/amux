@@ -5453,7 +5453,7 @@ PWA_MANIFEST = json.dumps({
 
 # Robust service worker: cache-first with localStorage fallback for multi-day offline
 SERVICE_WORKER = r"""
-const CACHE = 'amux-v0.6.1';
+const CACHE = 'amux-v0.6.2';
 const SHELL_URLS = ['/', '/manifest.json', '/icon-192.png', '/icon-512.png'];
 
 // Install: pre-cache entire app shell
@@ -5489,6 +5489,8 @@ self.addEventListener('message', e => {
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET') return;
+  // Only handle http/https (skip chrome-extension:// etc.)
+  if (!url.protocol.startsWith('http')) return;
 
   // API requests: network only (app JS handles offline queue)
   if (url.pathname.startsWith('/api/')) return;
@@ -5497,8 +5499,9 @@ self.addEventListener('fetch', e => {
   if (url.pathname === '/') {
     e.respondWith(
       fetch(e.request).then(response => {
+        const clone = response.clone();  // clone before any async op
         if (response.ok) {
-          caches.open(CACHE).then(c => c.put(e.request, response.clone()));
+          caches.open(CACHE).then(c => c.put(e.request, clone));
         }
         return response;
       }).catch(() =>
