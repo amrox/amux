@@ -1817,7 +1817,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <button id="tab-board" onclick="switchView('board')">Board</button>
 </div>
 <div id="session-view">
-<div style="padding:0 12px;margin-top:8px;">
+<div style="padding:0 12px;margin-top:4px;">
   <div class="search-wrap" id="search-wrap">
     <input class="search-input" id="search-input" type="text" placeholder="Search sessions..." autocomplete="off" autocorrect="off"
       oninput="searchQuery=this.value;document.getElementById('search-wrap').classList.toggle('has-value',!!this.value);render()">
