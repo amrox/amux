@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# cmux — phone-friendly Claude Code session manager built on tmux
-# Usage: cmux [command] [args...]
+# amux — phone-friendly Claude Code session manager built on tmux
+# Usage: amux [command] [args...]
 
 set -euo pipefail
 
 CC_VERSION="0.3.0"
 
-# ── Migration from cc → cmux ────────────────────────────────────────────────
-# Migrate ~/.cc → ~/.cmux if old dir exists and new one doesn't
-if [[ -d "$HOME/.cc" && ! -d "$HOME/.cmux" ]]; then
-  mv "$HOME/.cc" "$HOME/.cmux"
-  echo "Migrated ~/.cc → ~/.cmux"
+# ── Migration from cc → amux ────────────────────────────────────────────────
+# Migrate ~/.cc → ~/.amux if old dir exists and new one doesn't
+if [[ -d "$HOME/.cc" && ! -d "$HOME/.amux" ]]; then
+  mv "$HOME/.cc" "$HOME/.amux"
+  echo "Migrated ~/.cc → ~/.amux"
 fi
 
-CC_HOME="${CC_HOME:-$HOME/.cmux}"
+CC_HOME="${CC_HOME:-$HOME/.amux}"
 CC_SESSIONS="$CC_HOME/sessions"
 CC_DEFAULTS="$CC_HOME/defaults.env"
 
@@ -93,13 +93,13 @@ load_defaults() {
 }
 
 # Get tmux session name (prefixed to avoid conflicts)
-tmux_name() { echo "cmux-$1"; }
+tmux_name() { echo "amux-$1"; }
 
-# Migrate a cc-* tmux session to cmux-* if needed
+# Migrate a cc-* tmux session to amux-* if needed
 migrate_tmux() {
   local name="$1"
-  if tmux has-session -t "cc-$name" 2>/dev/null && ! tmux has-session -t "cmux-$name" 2>/dev/null; then
-    tmux rename-session -t "cc-$name" "cmux-$name" 2>/dev/null || true
+  if tmux has-session -t "cc-$name" 2>/dev/null && ! tmux has-session -t "amux-$name" 2>/dev/null; then
+    tmux rename-session -t "cc-$name" "amux-$name" 2>/dev/null || true
   fi
 }
 
@@ -158,14 +158,14 @@ parse_claude_flags() {
 
 cmd_register() {
   local name="${1:-}"
-  [[ -n "$name" ]] || die "usage: cmux register <name> [--model opus] [--yolo] [--dir /path] [claude flags...]"
+  [[ -n "$name" ]] || die "usage: amux register <name> [--model opus] [--yolo] [--dir /path] [claude flags...]"
   shift
 
   parse_claude_flags "$@"
 
   local file="$CC_SESSIONS/$name.env"
   cat > "$file" <<EOF
-# cmux session: $name
+# amux session: $name
 # registered: $(date -Iseconds)
 CC_NAME="$name"
 CC_DIR="${CC_DIR:-$(pwd)}"
@@ -227,7 +227,7 @@ cmd_start() {
 cmd_exec() {
   # Register + start in one step
   local name="${1:-}"
-  [[ -n "$name" ]] || die "usage: cmux exec <name> [--model opus] [--yolo] [--dir /path] [claude flags...]"
+  [[ -n "$name" ]] || die "usage: amux exec <name> [--model opus] [--yolo] [--dir /path] [claude flags...]"
   shift
 
   parse_claude_flags "$@"
@@ -235,7 +235,7 @@ cmd_exec() {
   # Register if not exists, or update
   local file="$CC_SESSIONS/$name.env"
   cat > "$file" <<EOF
-# cmux session: $name
+# amux session: $name
 # registered: $(date -Iseconds)
 CC_NAME="$name"
 CC_DIR="${CC_DIR:-$(pwd)}"
@@ -252,7 +252,7 @@ cmd_attach() {
   need_tmux
   local tname
   tname=$(tmux_name "$name")
-  is_running "$name" || die "session '$name' is not running. Start with: cmux start $name"
+  is_running "$name" || die "session '$name' is not running. Start with: amux start $name"
   tmux attach-session -t "$tname"
 }
 
@@ -288,7 +288,7 @@ cmd_send() {
     echo "${GREEN}sent keys${RESET} to $name"
   else
     local text="$*"
-    [[ -n "$text" ]] || die "usage: cmux send <name> <text>  or  cmux send <name> --keys 'C-c'"
+    [[ -n "$text" ]] || die "usage: amux send <name> <text>  or  amux send <name> --keys 'C-c'"
     tmux send-keys -t "$tname" "$text" Enter
     echo "${GREEN}sent${RESET} to $name: $text"
   fi
@@ -380,7 +380,7 @@ cmd_ls() {
   done
 
   if ! $has_any; then
-    echo "${DIM}No sessions registered. Run: cmux register <name>${RESET}"
+    echo "${DIM}No sessions registered. Run: amux register <name>${RESET}"
   fi
 }
 
@@ -388,7 +388,7 @@ cmd_dashboard() {
   need_tmux
   clear
 
-  echo "${BOLD}${BLUE}  cmux${RESET} ${DIM}v${CC_VERSION}${RESET}"
+  echo "${BOLD}${BLUE}  amux${RESET} ${DIM}v${CC_VERSION}${RESET}"
   echo ""
   cmd_ls
   echo ""
@@ -396,7 +396,7 @@ cmd_dashboard() {
   echo ""
 
   while true; do
-    read -rp "${CYAN}cmux>${RESET} " input || break
+    read -rp "${CYAN}amux>${RESET} " input || break
     case "$input" in
       q|quit|exit)
         break
@@ -454,7 +454,7 @@ cmd_defaults() {
         echo "${BOLD}Global defaults:${RESET}"
         cat "$CC_DEFAULTS"
       else
-        echo "${DIM}No defaults set. Run: cmux defaults edit${RESET}"
+        echo "${DIM}No defaults set. Run: amux defaults edit${RESET}"
       fi
       ;;
     edit)
@@ -465,7 +465,7 @@ cmd_defaults() {
       echo "${GREEN}defaults reset${RESET}"
       ;;
     *)
-      die "usage: cmux defaults [show|edit|reset]"
+      die "usage: amux defaults [show|edit|reset]"
       ;;
   esac
 }
@@ -497,43 +497,43 @@ cmd_serve() {
   # Resolve cc-server.py relative to the real location of this script
   local script_dir
   script_dir="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")")" && pwd)"
-  local server="$script_dir/cmux-server.py"
+  local server="$script_dir/amux-server.py"
   # Fall back to old name during migration
   [[ -f "$server" ]] || server="$script_dir/cc-server.py"
-  [[ -f "$server" ]] || die "cmux-server.py not found at $script_dir"
-  command -v python3 &>/dev/null || die "python3 is required for cmux serve"
+  [[ -f "$server" ]] || die "amux-server.py not found at $script_dir"
+  command -v python3 &>/dev/null || die "python3 is required for amux serve"
   exec python3 "$server" "$port"
 }
 
 cmd_help() {
   cat <<EOF
-${BOLD}cmux${RESET} — phone-friendly Claude Code session manager ${DIM}v${CC_VERSION}${RESET}
+${BOLD}amux${RESET} — phone-friendly Claude Code session manager ${DIM}v${CC_VERSION}${RESET}
 
 ${BOLD}Session management:${RESET}
-  cmux register <name> [flags]   Register a session with Claude Code flags
-  cmux start <name>              Start a registered session in tmux
-  cmux exec <name> [flags]       Register + start in one step
-  cmux stop <name>               Stop a running session
-  cmux rm <name>                 Remove a session (stops if running)
-  cmux start-all                 Start all registered sessions
-  cmux stop-all                  Stop all running sessions
+  amux register <name> [flags]   Register a session with Claude Code flags
+  amux start <name>              Start a registered session in tmux
+  amux exec <name> [flags]       Register + start in one step
+  amux stop <name>               Stop a running session
+  amux rm <name>                 Remove a session (stops if running)
+  amux start-all                 Start all registered sessions
+  amux stop-all                  Stop all running sessions
 
 ${BOLD}Interaction:${RESET}
-  cmux attach <name>             Attach to a running session (detach: Ctrl-b d)
-  cmux peek <name> [lines]       View last N lines without attaching (default: 30)
-  cmux send <name> <text>        Send text + Enter to a session
-  cmux send <name> --keys 'C-c'  Send raw key sequence (e.g., Ctrl-C)
+  amux attach <name>             Attach to a running session (detach: Ctrl-b d)
+  amux peek <name> [lines]       View last N lines without attaching (default: 30)
+  amux send <name> <text>        Send text + Enter to a session
+  amux send <name> --keys 'C-c'  Send raw key sequence (e.g., Ctrl-C)
 
 ${BOLD}Info:${RESET}
-  cmux ls                        List all sessions with status and previews
-  cmux info <name>               Show session config details
-  cmux defaults [show|edit|reset] Manage global default flags
+  amux ls                        List all sessions with status and previews
+  amux info <name>               Show session config details
+  amux defaults [show|edit|reset] Manage global default flags
 
 ${BOLD}Dashboard:${RESET}
-  cmux                           Interactive dashboard (optimized for phone)
+  amux                           Interactive dashboard (optimized for phone)
 
 ${BOLD}Web Dashboard:${RESET}
-  cmux serve [port]              Start web dashboard (default: 8822)
+  amux serve [port]              Start web dashboard (default: 8822)
 
 ${BOLD}Claude Code flags (on register/exec):${RESET}
   --model <model>              Model: opus, sonnet, haiku, or full ID
@@ -553,15 +553,15 @@ ${BOLD}Claude Code flags (on register/exec):${RESET}
   ... and all other claude CLI flags pass through
 
 ${BOLD}Session names support fuzzy matching:${RESET}
-  cmux peek api                  Matches 'api', 'api-server', etc.
-  cmux 3                         Attach to session #3 from cmux ls
+  amux peek api                  Matches 'api', 'api-server', etc.
+  amux 3                         Attach to session #3 from amux ls
 
 ${BOLD}Examples:${RESET}
-  cmux register api --model opus --yolo --dir ~/Dev/myapp
-  cmux exec frontend --append-system-prompt "React + Tailwind"
-  cmux send api "fix the auth bug in login.ts"
-  cmux send api --keys 'C-c'
-  cmux peek api 50
+  amux register api --model opus --yolo --dir ~/Dev/myapp
+  amux exec frontend --append-system-prompt "React + Tailwind"
+  amux send api "fix the auth bug in login.ts"
+  amux send api --keys 'C-c'
+  amux peek api 50
 EOF
 }
 
@@ -585,13 +585,13 @@ case "${1:-}" in
   stop-all)         cmd_stop_all ;;
   serve|web)        shift; cmd_serve "$@" ;;
   help|--help|-h)   cmd_help ;;
-  version|--version|-v) echo "cmux v${CC_VERSION}" ;;
+  version|--version|-v) echo "amux v${CC_VERSION}" ;;
   "")               cmd_dashboard ;;
   *)
     # Try as session name shortcut
     name=$(resolve_session "$1" 2>/dev/null) && cmd_attach "$name" || {
       echo "${RED}unknown command:${RESET} $1"
-      echo "Run ${BOLD}cmux help${RESET} for usage"
+      echo "Run ${BOLD}amux help${RESET} for usage"
       exit 1
     }
     ;;

@@ -1,70 +1,70 @@
-# cmux — Claude Code Multiplexer
+# amux — Claude Code Multiplexer
 
-Manage multiple Claude Code sessions from your terminal or phone. cmux wraps tmux to let you run, monitor, and control headless Claude Code instances from a single dashboard — locally or over the network as a PWA.
+Manage multiple Claude Code sessions from your terminal or phone. amux wraps tmux to let you run, monitor, and control headless Claude Code instances from a single dashboard — locally or over the network as a PWA.
 
 ## Install
 
 ```bash
-git clone <repo> && cd cmux
+git clone <repo> && cd amux
 ./install.sh
 ```
 
-Requires `tmux` and `python3`. Installs `cmux` (and alias `cc`) to `/usr/local/bin`.
+Requires `tmux` and `python3`. Installs `amux` (and alias `cc`) to `/usr/local/bin`.
 
 ## Quick Start
 
 ```bash
 # Register a session
-cmux register myproject --dir ~/Dev/myproject --yolo
+amux register myproject --dir ~/Dev/myproject --yolo
 
 # Start it headless
-cmux start myproject
+amux start myproject
 
 # Open the terminal dashboard
-cmux
+amux
 
 # Or serve the web dashboard
-cmux serve
+amux serve
 ```
 
 ## CLI Commands
 
 | Command | Alias | Description |
 |---------|-------|-------------|
-| `cmux` | | Interactive terminal dashboard |
-| `cmux register <name> --dir <path>` | `reg` | Register a new session |
-| `cmux start <name>` | | Start a session headless |
-| `cmux stop <name>` | `kill` | Stop a running session |
-| `cmux attach <name>` | `a` | Attach to a session's tmux |
-| `cmux peek <name> [lines]` | `p` | View session output without attaching |
-| `cmux send <name> <text>` | | Send text/command to a session |
-| `cmux exec <name> [flags] -- <prompt>` | `run` | Register, start, and send a prompt in one shot |
-| `cmux ls` | `list` | List all sessions |
-| `cmux info <name>` | | Show session details |
-| `cmux rm <name>` | `del` | Remove a session |
-| `cmux start-all` | | Start all registered sessions |
-| `cmux stop-all` | | Stop all running sessions |
-| `cmux defaults` | `config` | Manage default flags |
-| `cmux serve` | `web` | Start the web dashboard |
+| `amux` | | Interactive terminal dashboard |
+| `amux register <name> --dir <path>` | `reg` | Register a new session |
+| `amux start <name>` | | Start a session headless |
+| `amux stop <name>` | `kill` | Stop a running session |
+| `amux attach <name>` | `a` | Attach to a session's tmux |
+| `amux peek <name> [lines]` | `p` | View session output without attaching |
+| `amux send <name> <text>` | | Send text/command to a session |
+| `amux exec <name> [flags] -- <prompt>` | `run` | Register, start, and send a prompt in one shot |
+| `amux ls` | `list` | List all sessions |
+| `amux info <name>` | | Show session details |
+| `amux rm <name>` | `del` | Remove a session |
+| `amux start-all` | | Start all registered sessions |
+| `amux stop-all` | | Stop all running sessions |
+| `amux defaults` | `config` | Manage default flags |
+| `amux serve` | `web` | Start the web dashboard |
 
-Session names support prefix matching — `cmux attach my` resolves to `myproject` if unambiguous.
+Session names support prefix matching — `amux attach my` resolves to `myproject` if unambiguous.
 
 ## Claude Code Flags
 
 Pass any Claude Code flag when registering:
 
 ```bash
-cmux register api --dir ~/Dev/api --yolo --model sonnet
-cmux register fast --dir ~/Dev/fast --model haiku --dangerously-skip-permissions
+amux register api --dir ~/Dev/api --yolo --model sonnet
+amux register fast --dir ~/Dev/fast --model haiku --dangerously-skip-permissions
 ```
 
 ## Web Dashboard (PWA)
 
-`cmux serve` starts an HTTPS server (default port 8822) that serves a full-featured dashboard:
+`amux serve` starts an HTTPS server (default port 8822) that serves a full-featured dashboard:
 
 ```bash
-cmux serve           # serves on :8822
-cmux serve 9000      # custom port
+amux serve           # serves on :8822
+amux serve 9000      # custom port
 ```
 
 ### Features
@@ -82,7 +82,7 @@ cmux serve 9000      # custom port
 - **File preview** — clickable file paths in peek output open syntax-highlighted previews
 - **Peek search** — find text within peek output with match highlighting and count
 - **Peek command bar** — send commands directly from peek mode with slash autocomplete
-- **Connect tmux sessions** — adopt existing tmux sessions not created by cmux
+- **Connect tmux sessions** — adopt existing tmux sessions not created by amux
 
 ### Board (Kanban)
 
@@ -92,7 +92,7 @@ A built-in kanban board for task tracking across sessions:
 - **Session linking** — associate board items with sessions; click session badges to filter
 - **Tags** — add tags to items, click tag chips to filter the board
 - **Search** — full-text search across board item titles and descriptions
-- **Issue keys** — auto-generated keys based on session name (e.g., VAN-1, CMUX-3)
+- **Issue keys** — auto-generated keys based on session name (e.g., VAN-1, AMUX-3)
 - **Clear done** — bulk-clear completed items
 - **REST API** — `GET/POST/PATCH/DELETE /api/board` for external integrations
 
@@ -106,7 +106,7 @@ curl -sk -X POST -H 'Content-Type: application/json' \
 curl -sk https://localhost:8822/api/board
 ```
 
-Board data is stored in `~/.cmux/board.json`.
+Board data is stored in `~/.amux/board.json`.
 
 ### Real-Time Updates (SSE)
 
@@ -141,11 +141,11 @@ Background Sync is Chrome/Edge only. Safari and Firefox fall back to the existin
 
 ### Token Stats
 
-Click the "cmux" logo to open the about modal with daily token usage:
+Click the "amux" logo to open the about modal with daily token usage:
 
 - Total tokens across all Claude Code sessions
 - Per-session breakdown with bar charts
-- cmux-managed vs external session split
+- amux-managed vs external session split
 - Reset button to zero counters for the day
 
 ### HTTPS & Tailscale
@@ -158,16 +158,16 @@ The server auto-generates TLS certs for HTTPS, required for PWA/service worker o
 
 ```bash
 # With Tailscale (recommended for phone access)
-cmux serve
+amux serve
 # → https://your-machine.tailnet-name.ts.net:8822
 
 # With mkcert
 brew install mkcert && mkcert -install
-cmux serve
+amux serve
 # → https://localhost:8822
 
 # Disable TLS
-cmux serve --no-tls
+amux serve --no-tls
 ```
 
 For iOS PWA without Tailscale: install the mkcert root CA (`~/.local/share/mkcert/rootCA.pem`) via AirDrop, then trust it in Settings > General > About > Certificate Trust Settings.
@@ -207,7 +207,7 @@ All dashboard features are backed by a REST API:
 
 ## Session Logs
 
-cmux periodically snapshots all running sessions to `~/.cmux/logs/` (every 60s, up to 10MB per session). This means:
+amux periodically snapshots all running sessions to `~/.amux/logs/` (every 60s, up to 10MB per session). This means:
 
 - Stopped sessions still show preview lines and peek output from saved logs
 - Session output survives server restarts
@@ -216,7 +216,7 @@ cmux periodically snapshots all running sessions to `~/.cmux/logs/` (every 60s, 
 ## File Layout
 
 ```
-~/.cmux/
+~/.amux/
   sessions/            # session .env files (CC_DIR, CC_FLAGS, etc.)
   logs/                # session scrollback snapshots
   tls/                 # auto-generated TLS certs
@@ -230,21 +230,21 @@ cmux periodically snapshots all running sessions to `~/.cmux/logs/` (every 60s, 
 ### Global defaults
 
 ```bash
-cmux defaults show           # view current defaults
-cmux defaults edit           # open in $EDITOR
-cmux defaults reset          # clear all defaults
+amux defaults show           # view current defaults
+amux defaults edit           # open in $EDITOR
+amux defaults reset          # clear all defaults
 ```
 
 Set default flags applied to all sessions:
 
 ```bash
-# In ~/.cmux/defaults.env:
+# In ~/.amux/defaults.env:
 CC_DEFAULT_FLAGS="--dangerously-skip-permissions"
 ```
 
 ### Per-session config
 
-Each session is a simple env file in `~/.cmux/sessions/<name>.env`:
+Each session is a simple env file in `~/.amux/sessions/<name>.env`:
 
 ```bash
 CC_DIR="/Users/you/Dev/project"
@@ -256,7 +256,7 @@ CC_PINNED="1"
 
 ## Architecture
 
-Everything lives in a single file: `cmux-server.py`. The Python server uses `http.server.ThreadingHTTPServer` with inline HTML/CSS/JS for the dashboard. No build step, no dependencies beyond Python 3 and tmux.
+Everything lives in a single file: `amux-server.py`. The Python server uses `http.server.ThreadingHTTPServer` with inline HTML/CSS/JS for the dashboard. No build step, no dependencies beyond Python 3 and tmux.
 
 - **Server** — Python `BaseHTTPRequestHandler` with routing, TLS, file watching (auto-restart on save)
 - **Client** — vanilla JS SPA with SSE for real-time updates, service worker for offline/PWA

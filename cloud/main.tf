@@ -16,22 +16,22 @@ provider "google" {
 
 # ---------- Network ----------
 
-resource "google_compute_network" "cmux" {
-  name                    = "cmux-net"
+resource "google_compute_network" "amux" {
+  name                    = "amux-net"
   auto_create_subnetworks = false
 }
 
-resource "google_compute_subnetwork" "cmux" {
-  name          = "cmux-subnet"
+resource "google_compute_subnetwork" "amux" {
+  name          = "amux-subnet"
   ip_cidr_range = "10.10.0.0/24"
-  network       = google_compute_network.cmux.id
+  network       = google_compute_network.amux.id
   region        = var.region
 }
 
 # Allow internal + Tailscale only — no public SSH
 resource "google_compute_firewall" "internal" {
-  name    = "cmux-allow-internal"
-  network = google_compute_network.cmux.id
+  name    = "amux-allow-internal"
+  network = google_compute_network.amux.id
 
   allow {
     protocol = "icmp"
@@ -50,17 +50,17 @@ resource "google_compute_firewall" "internal" {
 
 # ---------- Static internal IP ----------
 
-resource "google_compute_address" "cmux_internal" {
-  name         = "cmux-internal-ip"
+resource "google_compute_address" "amux_internal" {
+  name         = "amux-internal-ip"
   address_type = "INTERNAL"
-  subnetwork   = google_compute_subnetwork.cmux.id
+  subnetwork   = google_compute_subnetwork.amux.id
   region       = var.region
 }
 
 # ---------- Storage disk ----------
 
 resource "google_compute_disk" "storage" {
-  name = "cmux-storage"
+  name = "amux-storage"
   type = "pd-standard"
   size = var.storage_disk_size_gb
   zone = var.zone
@@ -68,12 +68,12 @@ resource "google_compute_disk" "storage" {
 
 # ---------- VM ----------
 
-resource "google_compute_instance" "cmux" {
-  name         = "cmux-dev"
+resource "google_compute_instance" "amux" {
+  name         = "amux-dev"
   machine_type = var.machine_type
   zone         = var.zone
 
-  tags = ["cmux"]
+  tags = ["amux"]
 
   boot_disk {
     initialize_params {
@@ -85,12 +85,12 @@ resource "google_compute_instance" "cmux" {
 
   attached_disk {
     source      = google_compute_disk.storage.id
-    device_name = "cmux-storage"
+    device_name = "amux-storage"
   }
 
   network_interface {
-    subnetwork = google_compute_subnetwork.cmux.id
-    network_ip = google_compute_address.cmux_internal.address
+    subnetwork = google_compute_subnetwork.amux.id
+    network_ip = google_compute_address.amux_internal.address
     # No access_config = no public IP
   }
 

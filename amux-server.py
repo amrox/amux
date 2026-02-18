@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cmux serve — web dashboard for Claude Code session manager."""
+"""amux serve — web dashboard for Claude Code session manager."""
 
 # ═══════════════════════════════════════════
 # CONFIGURATION & GLOBALS
@@ -19,12 +19,12 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
-# Support both ~/.cmux (new) and ~/.cc (old) for migration
-_cmux_home = Path.home() / ".cmux"
+# Support both ~/.amux (new) and ~/.cc (old) for migration
+_amux_home = Path.home() / ".amux"
 _cc_home = Path.home() / ".cc"
-if not _cmux_home.exists() and _cc_home.exists():
-    _cc_home.rename(_cmux_home)
-CC_HOME = Path(os.environ.get("CC_HOME", _cmux_home))
+if not _amux_home.exists() and _cc_home.exists():
+    _cc_home.rename(_amux_home)
+CC_HOME = Path(os.environ.get("CC_HOME", _amux_home))
 CC_SESSIONS = CC_HOME / "sessions"
 CC_LOGS = CC_HOME / "logs"
 CC_LOGS.mkdir(parents=True, exist_ok=True)
@@ -103,7 +103,7 @@ def _refresh_token_cache():
 # ═══════════════════════════════════════════
 
 def parse_env_file(path: Path) -> dict:
-    """Parse a cmux session .env file into a dict."""
+    """Parse a amux session .env file into a dict."""
     data = {}
     for line in path.read_text().splitlines():
         line = line.strip()
@@ -124,7 +124,7 @@ def parse_env_file(path: Path) -> dict:
 
 
 def _write_env(path: Path, cfg: dict):
-    """Write a cfg dict back to a cmux .env file."""
+    """Write a cfg dict back to a amux .env file."""
     lines = [f'# updated: {__import__("datetime").datetime.now().isoformat()}']
     for k, v in cfg.items():
         lines.append(f'{k}="{v}"')
@@ -136,9 +136,9 @@ def _write_env(path: Path, cfg: dict):
 # ═══════════════════════════════════════════
 
 def tmux_name(session: str) -> str:
-    # Migrate cc-* → cmux-* if old name exists
+    # Migrate cc-* → amux-* if old name exists
     old = f"cc-{session}"
-    new = f"cmux-{session}"
+    new = f"amux-{session}"
     try:
         r = subprocess.run(["tmux", "has-session", "-t", old], capture_output=True)
         if r.returncode == 0:
@@ -354,21 +354,21 @@ def _save_board(items: list):
 
 
 def get_daily_token_stats() -> dict:
-    """Get today's token usage across all Claude Code sessions and cmux sessions."""
+    """Get today's token usage across all Claude Code sessions and amux sessions."""
     from datetime import datetime, timezone
     today = datetime.now().strftime("%Y-%m-%d")
     projects_dir = CLAUDE_HOME / "projects"
     if not projects_dir.is_dir():
         return {"today": today, "total_tokens": 0, "total_input": 0, "total_output": 0, "sessions": []}
 
-    # Get cmux session dirs for labeling (multiple sessions can share a dir)
-    cmux_dirs = {}  # resolved_dir -> list of session names
+    # Get amux session dirs for labeling (multiple sessions can share a dir)
+    amux_dirs = {}  # resolved_dir -> list of session names
     for f in CC_SESSIONS.glob("*.env"):
         cfg = parse_env_file(f)
         d = cfg.get("CC_DIR", "")
         if d:
             resolved = str(Path(d).expanduser().resolve()).replace("/", "-")
-            cmux_dirs.setdefault(resolved, []).append(f.stem)
+            amux_dirs.setdefault(resolved, []).append(f.stem)
 
     total_in = 0
     total_out = 0
@@ -422,9 +422,9 @@ def get_daily_token_stats() -> dict:
                 continue
         if proj_in + proj_out > 0:
             proj_name = proj_dir.name
-            cmux_names = cmux_dirs.get(proj_name, [])
-            if cmux_names:
-                label = ", ".join(sorted(cmux_names))
+            amux_names = amux_dirs.get(proj_name, [])
+            if amux_names:
+                label = ", ".join(sorted(amux_names))
             else:
                 # Show short path: ~/Dev/project instead of /Users/ethan/Dev/project
                 # proj_name is like "-Users-ethan-Dev" → "/Users/ethan/Dev"
@@ -434,7 +434,7 @@ def get_daily_token_stats() -> dict:
             session_stats.append({
                 "name": label,
                 "proj_dir": proj_name,
-                "cmux": bool(cmux_names),
+                "amux": bool(amux_names),
                 "input": proj_in,
                 "output": proj_out,
                 "total": proj_in + proj_out,
@@ -457,13 +457,13 @@ def get_daily_token_stats() -> dict:
 
     session_stats = [s for s in session_stats if s["total"] > 0]
     session_stats.sort(key=lambda s: s["total"], reverse=True)
-    cmux_tokens = sum(s["total"] for s in session_stats if s["cmux"])
+    amux_tokens = sum(s["total"] for s in session_stats if s["amux"])
     return {
         "today": today,
         "total_tokens": total_in + total_out,
         "total_input": total_in,
         "total_output": total_out,
-        "cmux_tokens": cmux_tokens,
+        "amux_tokens": amux_tokens,
         "sessions": session_stats,
     }
 
@@ -836,7 +836,7 @@ def send_keys(name: str, keys: str) -> tuple[bool, str]:
 
 
 def list_tmux_sessions() -> list:
-    """List all tmux sessions with their working dirs, excluding already-registered cmux sessions."""
+    """List all tmux sessions with their working dirs, excluding already-registered amux sessions."""
     registered = set()
     if CC_SESSIONS.is_dir():
         for f in CC_SESSIONS.glob("*.env"):
@@ -885,8 +885,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#0d1117">
 <link rel="manifest" href="/manifest.json">
-<title>cmux</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230d1117'/><text x='50' y='68' font-family='system-ui' font-size='40' font-weight='700' fill='%2358a6ff' text-anchor='middle'>cmux</text></svg>">
+<title>amux</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230d1117'/><text x='50' y='68' font-family='system-ui' font-size='40' font-weight='700' fill='%2358a6ff' text-anchor='middle'>amux</text></svg>">
 <link rel="apple-touch-icon" href="/icon-192.png">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1784,7 +1784,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
 <div class="header-row">
   <div style="display:flex;gap:8px;align-items:center;">
-    <h1 style="margin:0;cursor:pointer;" onclick="openAbout()">cmux</h1>
+    <h1 style="margin:0;cursor:pointer;" onclick="openAbout()">amux</h1>
     <span id="conn-status" class="conn-status online" onclick="showQueueModal()"></span>
   </div>
   <div style="display:flex;gap:8px;align-items:center;">
@@ -1831,7 +1831,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         </div>
         <div class="settings-sep"></div>
         <div class="settings-section" style="text-align:center;">
-          <span style="font-size:0.7rem;color:var(--dim);cursor:pointer;" onclick="openAbout();closeSettings()">About cmux &amp; token stats</span>
+          <span style="font-size:0.7rem;color:var(--dim);cursor:pointer;" onclick="openAbout();closeSettings()">About amux &amp; token stats</span>
         </div>
       </div>
     </div>
@@ -2048,7 +2048,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <div id="about-overlay" class="queue-overlay" onclick="if(event.target===this)this.classList.remove('active')">
   <div class="queue-box" style="max-width:340px;">
     <div style="text-align:center;">
-      <h3 style="margin:0 0 4px;">cmux</h3>
+      <h3 style="margin:0 0 4px;">amux</h3>
       <div style="color:var(--dim);font-size:0.8rem;">Claude Code Multiplexer</div>
       <div style="color:var(--dim);font-size:0.7rem;font-family:monospace;margin-top:2px;"><script>document.write(location.host)</script></div>
       <div style="margin:8px 0 4px;font-size:0.95rem;font-weight:600;cursor:pointer;" onclick="forceUpdate()" title="Tap to force update">v0.6.0 &#x21BB;</div>
@@ -2151,23 +2151,23 @@ document.addEventListener('keydown', function(e) {
 let online = true;
 window.addEventListener('offline', () => setOnline(false));
 window.addEventListener('online', () => { consecutiveFailures = 0; setOnline(true); });
-// Migrate localStorage keys from cc_ to cmux_
+// Migrate localStorage keys from cc_ to amux_
 ['offline_queue','sessions_cache','drafts'].forEach(k => {
   const old = localStorage.getItem('cc_' + k);
-  if (old && !localStorage.getItem('cmux_' + k)) {
-    localStorage.setItem('cmux_' + k, old);
+  if (old && !localStorage.getItem('amux_' + k)) {
+    localStorage.setItem('amux_' + k, old);
     localStorage.removeItem('cc_' + k);
   }
 });
-let offlineQueue = JSON.parse(localStorage.getItem('cmux_offline_queue') || '[]');
+let offlineQueue = JSON.parse(localStorage.getItem('amux_offline_queue') || '[]');
 function saveQueue() {
-  localStorage.setItem('cmux_offline_queue', JSON.stringify(offlineQueue));
+  localStorage.setItem('amux_offline_queue', JSON.stringify(offlineQueue));
   if (typeof _idb !== 'undefined') _idb.set('offline_queue', offlineQueue);
 }
 
 // ═══════ DEVICE NAME ═══════
 function _getDeviceName() {
-  const custom = localStorage.getItem('cmux_device_name');
+  const custom = localStorage.getItem('amux_device_name');
   if (custom) return custom;
   const ua = navigator.userAgent;
   if (/iPhone/.test(ua)) return 'iPhone';
@@ -2180,11 +2180,11 @@ function _getDeviceName() {
 }
 
 // ═══════ DRAFTS — offline-created sessions ═══════
-let drafts = JSON.parse(localStorage.getItem('cmux_drafts') || '[]');
+let drafts = JSON.parse(localStorage.getItem('amux_drafts') || '[]');
 // Draft shape: { name, dir, prompt, created_at, syncing }
 
 function saveDrafts() {
-  localStorage.setItem('cmux_drafts', JSON.stringify(drafts));
+  localStorage.setItem('amux_drafts', JSON.stringify(drafts));
   if (typeof _idb !== 'undefined') _idb.set('drafts', drafts);
 }
 
@@ -2503,7 +2503,7 @@ async function fetchSessions() {
     if (j !== lastSessionsJSON) {
       lastSessionsJSON = j;
       sessions = data;
-      localStorage.setItem('cmux_sessions_cache', j);
+      localStorage.setItem('amux_sessions_cache', j);
       render();
     }
   } catch(e) {
@@ -3657,7 +3657,7 @@ function toggleTagFilter(tag) {
 }
 function toggleTagGroup(tag) {
   _tagGroupCollapsed[tag] = !_tagGroupCollapsed[tag];
-  localStorage.setItem('cmux_tag_collapsed', JSON.stringify(_tagGroupCollapsed));
+  localStorage.setItem('amux_tag_collapsed', JSON.stringify(_tagGroupCollapsed));
   render();
 }
 function clearSearch() {
@@ -4097,14 +4097,14 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ═══════ DRAGGABLE TILES ═══════
-let tileMode = localStorage.getItem('cmux_layout') || 'grid';
-let tilePositions = JSON.parse(localStorage.getItem('cmux_tile_positions') || '{}');
+let tileMode = localStorage.getItem('amux_layout') || 'grid';
+let tilePositions = JSON.parse(localStorage.getItem('amux_tile_positions') || '{}');
 let _tileDragging = null; // {name, card, startX, startY, origX, origY}
 let _tileJustDragged = false;
 
 function setTileMode(mode) {
   tileMode = mode;
-  localStorage.setItem('cmux_layout', mode);
+  localStorage.setItem('amux_layout', mode);
   const cards = document.querySelector('.cards');
   if (!cards) return;
   document.getElementById('tile-grid-btn').classList.toggle('active', mode === 'grid');
@@ -4144,7 +4144,7 @@ function applyTilePositions() {
 
 function autoArrangeTiles() {
   tilePositions = {};
-  localStorage.removeItem('cmux_tile_positions');
+  localStorage.removeItem('amux_tile_positions');
   applyTilePositions();
 }
 
@@ -4193,7 +4193,7 @@ document.addEventListener('mouseup', function(e) {
       x: parseFloat(_tileDragging.card.style.left) || 0,
       y: parseFloat(_tileDragging.card.style.top) || 0,
     };
-    localStorage.setItem('cmux_tile_positions', JSON.stringify(tilePositions));
+    localStorage.setItem('amux_tile_positions', JSON.stringify(tilePositions));
     // Update container height
     const cards = _tileDragging.card.parentElement;
     let maxBottom = 0;
@@ -4230,9 +4230,9 @@ let boardFilterTag = null;
 let boardFilterSession = null;
 let boardSearchQuery = '';
 let _boardDragId = null;
-let boardViewMode = localStorage.getItem('cmux_board_view') || 'session';
-let _sessionGroupCollapsed = JSON.parse(localStorage.getItem('cmux_board_collapsed') || '{}');
-let _tagGroupCollapsed = JSON.parse(localStorage.getItem('cmux_tag_collapsed') || '{}');
+let boardViewMode = localStorage.getItem('amux_board_view') || 'session';
+let _sessionGroupCollapsed = JSON.parse(localStorage.getItem('amux_board_collapsed') || '{}');
+let _tagGroupCollapsed = JSON.parse(localStorage.getItem('amux_tag_collapsed') || '{}');
 
 function switchView(view) {
   activeView = view;
@@ -4260,7 +4260,7 @@ async function fetchBoard() {
     if (j !== lastBoardJSON) {
       lastBoardJSON = j;
       boardItems = data;
-      localStorage.setItem('cmux_board_cache', j);
+      localStorage.setItem('amux_board_cache', j);
       renderBoard();
     }
   } catch(e) {
@@ -4398,13 +4398,13 @@ let _prevCardRects = {};
 
 function setBoardView(mode) {
   boardViewMode = mode;
-  localStorage.setItem('cmux_board_view', mode);
+  localStorage.setItem('amux_board_view', mode);
   renderBoard();
 }
 
 function toggleSessionGroup(name) {
   _sessionGroupCollapsed[name] = !_sessionGroupCollapsed[name];
-  localStorage.setItem('cmux_board_collapsed', JSON.stringify(_sessionGroupCollapsed));
+  localStorage.setItem('amux_board_collapsed', JSON.stringify(_sessionGroupCollapsed));
   renderBoard();
 }
 
@@ -4801,7 +4801,7 @@ async function boardDetailDelete() {
 
 function saveBoardCache() {
   lastBoardJSON = JSON.stringify(boardItems);
-  localStorage.setItem('cmux_board_cache', lastBoardJSON);
+  localStorage.setItem('amux_board_cache', lastBoardJSON);
 }
 
 async function addBoardItem(title, desc, status, session, tags) {
@@ -4863,12 +4863,12 @@ async function clearDone() {
 
 // ═══════ INIT ═══════
 // Load cached sessions immediately so offline startup renders content
-const _cachedInit = localStorage.getItem('cmux_sessions_cache');
+const _cachedInit = localStorage.getItem('amux_sessions_cache');
 if (_cachedInit) {
   try { sessions = JSON.parse(_cachedInit); } catch(e) {}
 }
 // Load cached board
-const _cachedBoard = localStorage.getItem('cmux_board_cache');
+const _cachedBoard = localStorage.getItem('amux_board_cache');
 if (_cachedBoard) {
   try { boardItems = JSON.parse(_cachedBoard); lastBoardJSON = _cachedBoard; } catch(e) {}
 }
@@ -4895,7 +4895,7 @@ function connectSSE() {
         if (j !== lastSessionsJSON) {
           lastSessionsJSON = j;
           sessions = msg.payload;
-          localStorage.setItem('cmux_sessions_cache', j);
+          localStorage.setItem('amux_sessions_cache', j);
           render();
         }
       } else if (msg.type === 'board') {
@@ -4903,7 +4903,7 @@ function connectSSE() {
         if (j !== lastBoardJSON) {
           lastBoardJSON = j;
           boardItems = msg.payload;
-          localStorage.setItem('cmux_board_cache', j);
+          localStorage.setItem('amux_board_cache', j);
           if (activeView === 'board') renderBoard();
         }
       }
@@ -4938,7 +4938,7 @@ if ('serviceWorker' in navigator) {
     // Store full page HTML in localStorage as fallback if iOS evicts SW cache
     if (navigator.onLine !== false) {
       fetch('/').then(r => r.text()).then(html => {
-        localStorage.setItem('cmux_app_html', html);
+        localStorage.setItem('amux_app_html', html);
         // Also ensure SW cache has it (in case cache was evicted but SW survived)
         if (reg.active) reg.active.postMessage({ type: 'CACHE_HTML', html });
       }).catch(() => {});
@@ -4968,7 +4968,7 @@ const _idb = (() => {
   let db = null;
   const open = () => new Promise((resolve, reject) => {
     if (db) return resolve(db);
-    const req = indexedDB.open('cmux', 1);
+    const req = indexedDB.open('amux', 1);
     req.onupgradeneeded = () => {
       const d = req.result;
       if (!d.objectStoreNames.contains('kv')) d.createObjectStore('kv');
@@ -4992,7 +4992,7 @@ const _idb = (() => {
 
 // Dual-write drafts and queue to both localStorage and IndexedDB
 function persistOfflineData() {
-  localStorage.setItem('cmux_drafts', JSON.stringify(drafts));
+  localStorage.setItem('amux_drafts', JSON.stringify(drafts));
   saveQueue();
   _idb.set('drafts', drafts);
   _idb.set('offline_queue', offlineQueue);
@@ -5033,7 +5033,7 @@ function openAbout() {
   fetch(API + '/api/stats/daily').then(r => r.json()).then(data => {
     let html = '<div style="font-size:0.8rem;font-weight:600;margin-bottom:8px;">Today\'s Tokens</div>';
     html += '<div style="display:flex;justify-content:space-between;font-size:0.85rem;margin-bottom:6px;">';
-    html += '<span>cmux sessions</span><span style="font-weight:600;">' + fmtTokens(data.cmux_tokens) + '</span></div>';
+    html += '<span>amux sessions</span><span style="font-weight:600;">' + fmtTokens(data.amux_tokens) + '</span></div>';
     html += '<div style="display:flex;justify-content:space-between;font-size:0.85rem;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border);">';
     html += '<span>All Claude Code</span><span style="font-weight:600;">' + fmtTokens(data.total_tokens) + '</span></div>';
     if (data.sessions && data.sessions.length) {
@@ -5042,10 +5042,10 @@ function openAbout() {
         const bar = s.total / data.total_tokens * 100;
         html += '<div style="margin-bottom:4px;">';
         html += '<div style="display:flex;justify-content:space-between;font-size:0.75rem;">';
-        html += '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px;">' + (s.cmux ? '' : '<span style=color:var(--dim)>') + esc(s.name) + (s.cmux ? '' : '</span>') + '</span>';
+        html += '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px;">' + (s.amux ? '' : '<span style=color:var(--dim)>') + esc(s.name) + (s.amux ? '' : '</span>') + '</span>';
         html += '<span style="flex-shrink:0;margin-left:8px;">' + fmtTokens(s.total) + '</span></div>';
         html += '<div style="height:3px;border-radius:2px;background:var(--border);margin-top:2px;">';
-        html += '<div style="height:100%;border-radius:2px;background:' + (s.cmux ? 'var(--accent)' : 'var(--dim)') + ';width:' + bar.toFixed(1) + '%;"></div></div></div>';
+        html += '<div style="height:100%;border-radius:2px;background:' + (s.amux ? 'var(--accent)' : 'var(--dim)') + ';width:' + bar.toFixed(1) + '%;"></div></div></div>';
       });
     } else {
       html += '<div style="color:var(--dim);font-size:0.75rem;text-align:center;">No usage today</div>';
@@ -5066,9 +5066,9 @@ function resetTokenStats() {
 
 // ═══════ SERVER SWITCHER ═══════
 function _getSavedServers() {
-  try { return JSON.parse(localStorage.getItem('cmux_servers') || '[]'); } catch(e) { return []; }
+  try { return JSON.parse(localStorage.getItem('amux_servers') || '[]'); } catch(e) { return []; }
 }
-function _saveServers(list) { localStorage.setItem('cmux_servers', JSON.stringify(list)); }
+function _saveServers(list) { localStorage.setItem('amux_servers', JSON.stringify(list)); }
 
 function renderServerList() {
   const list = document.getElementById('server-list');
@@ -5149,7 +5149,7 @@ function toggleSettings() {
   if (open) {
     // Show effective device name and populate override input
     const effective = _getDeviceName();
-    const custom = localStorage.getItem('cmux_device_name') || '';
+    const custom = localStorage.getItem('amux_device_name') || '';
     document.getElementById('settings-device-current').textContent = effective;
     const inp = document.getElementById('settings-device-name');
     inp.value = custom;
@@ -5177,9 +5177,9 @@ function closeSettings() {
 function saveDeviceName(val) {
   val = val.trim();
   if (val) {
-    localStorage.setItem('cmux_device_name', val);
+    localStorage.setItem('amux_device_name', val);
   } else {
-    localStorage.removeItem('cmux_device_name');
+    localStorage.removeItem('amux_device_name');
   }
   // Update displayed name immediately
   const el = document.getElementById('settings-device-current');
@@ -5282,8 +5282,8 @@ function forceUpdate() {
 # ═══════════════════════════════════════════
 
 PWA_MANIFEST = json.dumps({
-    "name": "cmux — Claude Code Multiplexer",
-    "short_name": "cmux",
+    "name": "amux — Claude Code Multiplexer",
+    "short_name": "amux",
     "start_url": "/",
     "display": "standalone",
     "background_color": "#0d1117",
@@ -5296,7 +5296,7 @@ PWA_MANIFEST = json.dumps({
 
 # Robust service worker: cache-first with localStorage fallback for multi-day offline
 SERVICE_WORKER = r"""
-const CACHE = 'cmux-v0.6.0';
+const CACHE = 'amux-v0.6.0';
 const SHELL_URLS = ['/', '/manifest.json', '/icon-192.png', '/icon-512.png'];
 
 // Install: pre-cache entire app shell
@@ -5362,7 +5362,7 @@ self.addEventListener('sync', e => {
   e.waitUntil((async () => {
     // Open IndexedDB directly (SW can't access localStorage)
     const db = await new Promise((resolve, reject) => {
-      const req = indexedDB.open('cmux', 1);
+      const req = indexedDB.open('amux', 1);
       req.onupgradeneeded = () => {
         const d = req.result;
         if (!d.objectStoreNames.contains('kv')) d.createObjectStore('kv');
@@ -5410,7 +5410,7 @@ self.addEventListener('sync', e => {
 
 
 def _generate_icon_png(size):
-    """Generate a simple PNG icon for cmux. Returns raw PNG bytes."""
+    """Generate a simple PNG icon for amux. Returns raw PNG bytes."""
     import struct, zlib
     w = h = size
     rows = []
@@ -5696,11 +5696,11 @@ class CCHandler(BaseHTTPRequestHandler):
                 # Build issue key from session name initials (e.g. "my-project" → "MP", "infra" → "INFRA")
                 words = [w for w in re.split(r'[-_\s]+', session) if w] if session else []
                 if not words:
-                    prefix = "CMUX"
+                    prefix = "AMUX"
                 elif len(words) == 1:
-                    prefix = re.sub(r'[^A-Z0-9]', '', words[0].upper())[:5] or "CMUX"
+                    prefix = re.sub(r'[^A-Z0-9]', '', words[0].upper())[:5] or "AMUX"
                 else:
-                    prefix = re.sub(r'[^A-Z0-9]', '', ''.join(w[0] for w in words).upper())[:5] or "CMUX"
+                    prefix = re.sub(r'[^A-Z0-9]', '', ''.join(w[0] for w in words).upper())[:5] or "AMUX"
                 n = counters.get(prefix, 0) + 1
                 counters[prefix] = n
                 item = {
@@ -5760,9 +5760,9 @@ class CCHandler(BaseHTTPRequestHandler):
             cc_name = body.get("name", "").strip()
             if not tmux_session:
                 return self._json({"error": "missing tmux_name"}, 400)
-            # Derive name: strip cmux-/cc- prefix if present, or use as-is
+            # Derive name: strip amux-/cc- prefix if present, or use as-is
             if not cc_name:
-                cc_name = tmux_session.removeprefix("cmux-").removeprefix("cc-")
+                cc_name = tmux_session.removeprefix("amux-").removeprefix("cc-")
             cc_name = re.sub(r'[^a-zA-Z0-9_-]', '-', cc_name)
             env_file = CC_SESSIONS / f"{cc_name}.env"
             if env_file.exists():
@@ -5779,7 +5779,7 @@ class CCHandler(BaseHTTPRequestHandler):
                 cwd = ""
             cfg = {"CC_DIR": cwd, "CC_FLAGS": ""}
             _write_env(env_file, cfg)
-            # Rename the tmux session to match cmux convention
+            # Rename the tmux session to match amux convention
             expected_tmux = tmux_name(cc_name)
             if tmux_session != expected_tmux:
                 try:
@@ -6066,7 +6066,7 @@ class CCHandler(BaseHTTPRequestHandler):
 # ═══════════════════════════════════════════
 
 def _watch_self(server):
-    """Watch cmux-server.py for changes and restart on modification."""
+    """Watch amux-server.py for changes and restart on modification."""
     script = Path(__file__).resolve()
     mtime = script.stat().st_mtime
     while True:
@@ -6145,7 +6145,7 @@ def _ensure_tls(lan_ip: str) -> tuple:
     subprocess.run(
         ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
          "-keyout", str(key_file), "-out", str(cert_file),
-         "-days", "365", "-subj", "/CN=cmux",
+         "-days", "365", "-subj", "/CN=amux",
          "-addext", f"subjectAltName=DNS:localhost,IP:127.0.0.1,IP:{lan_ip}"],
         capture_output=True, check=True,
     )
@@ -6173,7 +6173,7 @@ def main():
         except Exception as e:
             print(f"\033[33m  TLS setup failed ({e}), falling back to HTTP\033[0m")
 
-    print(f"\033[1m\033[34mcmux\033[0m web dashboard running")
+    print(f"\033[1m\033[34mamux\033[0m web dashboard running")
     print(f"  Local:   {scheme}://localhost:{port}")
     if ts_hostname:
         print(f"  Tailscale: {scheme}://{ts_hostname}:{port}")
@@ -6189,7 +6189,7 @@ def main():
             print(f"\033[32m  ✓ HTTPS enabled — service worker & offline mode will work\033[0m")
     else:
         print(f"\033[33m  ⚠ HTTP only — offline mode requires HTTPS on non-localhost\033[0m")
-    print(f"\033[2m  Auto-reload active — editing cmux-server.py will restart\033[0m")
+    print(f"\033[2m  Auto-reload active — editing amux-server.py will restart\033[0m")
     print(f"\n\033[2mPress Ctrl-C to stop\033[0m")
 
     # Start file watcher thread
