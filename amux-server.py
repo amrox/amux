@@ -137,15 +137,16 @@ def _write_env(path: Path, cfg: dict):
 # ═══════════════════════════════════════════
 
 def tmux_name(session: str) -> str:
-    # Migrate cc-* → amux-* if old name exists
-    old = f"cc-{session}"
+    # Migrate cmux-* or cc-* → amux-* if old name exists
     new = f"amux-{session}"
-    try:
-        r = subprocess.run(["tmux", "has-session", "-t", old], capture_output=True)
-        if r.returncode == 0:
-            subprocess.run(["tmux", "rename-session", "-t", old, new], capture_output=True, timeout=5)
-    except Exception:
-        pass
+    for old in [f"cmux-{session}", f"cc-{session}"]:
+        try:
+            r = subprocess.run(["tmux", "has-session", "-t", old], capture_output=True)
+            if r.returncode == 0:
+                subprocess.run(["tmux", "rename-session", "-t", old, new], capture_output=True, timeout=5)
+                break
+        except Exception:
+            pass
     return new
 
 
