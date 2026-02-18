@@ -1250,6 +1250,44 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .header-add-menu.open { display: block; }
   .header-add-menu .card-menu-item { padding: 12px 16px; }
 
+  /* Settings dropdown */
+  .settings-wrap { position: relative; }
+  .settings-btn {
+    font-size: 1.1rem; width: 40px; height: 40px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--card); color: var(--dim);
+    cursor: pointer; display: flex; align-items: center;
+    justify-content: center; -webkit-tap-highlight-color: transparent;
+  }
+  .settings-btn:active { background: var(--border); }
+  .settings-menu {
+    display: none; position: absolute; top: calc(100% + 6px); right: 0;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; min-width: 260px; z-index: 60;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4); overflow: hidden;
+    padding: 10px 0;
+  }
+  .settings-menu.open { display: block; }
+  .settings-section { padding: 6px 14px; }
+  .settings-section-label { font-size: 0.68rem; color: var(--dim); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px; font-weight: 600; }
+  .settings-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .settings-row input {
+    flex: 1; font-size: 0.78rem; padding: 6px 8px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+    outline: none; box-sizing: border-box; min-width: 0;
+  }
+  .settings-row input:focus { border-color: var(--accent); }
+  .settings-row input::placeholder { color: var(--dim); }
+  .settings-sep { height: 1px; background: var(--border); margin: 6px 0; }
+  .settings-server-item {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 8px; border-radius: 6px; cursor: pointer; margin-bottom: 2px;
+    transition: background 0.12s;
+  }
+  .settings-server-item:active { background: rgba(88,166,255,0.1); }
+  .settings-server-current { background: rgba(88,166,255,0.08); cursor: default; }
+  .settings-server-name { font-size: 0.78rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .settings-server-url { font-size: 0.65rem; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .settings-server-badge { font-size: 0.6rem; color: var(--accent); flex-shrink: 0; margin-left: 6px; }
 
   /* Peek search highlight */
   .peek-highlight { background: rgba(210,153,34,0.4); color: #fff; border-radius: 2px; }
@@ -1724,7 +1762,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <h1 style="margin:0;cursor:pointer;" onclick="openAbout()">cmux</h1>
     <span id="conn-status" class="conn-status online" onclick="showQueueModal()"></span>
   </div>
-  <div style="display:flex;gap:8px;align-items:center;flex:1;min-width:0;">
+  <div style="display:flex;gap:8px;align-items:center;">
     <div class="active-wrap">
       <button class="btn-active" id="active-btn" onclick="event.stopPropagation();toggleActiveDropdown()">
         <span class="active-dot"></span>
@@ -1737,6 +1775,39 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <div class="header-add-menu" id="add-menu">
         <div class="card-menu-item" onclick="event.stopPropagation();closeAddMenu();openCreate()"><span class="mi">&#x2795;</span> New session</div>
         <div class="card-menu-item" onclick="event.stopPropagation();closeAddMenu();openConnect()"><span class="mi">&#x1F517;</span> Connect tmux</div>
+      </div>
+    </div>
+    <div class="settings-wrap">
+      <button class="settings-btn" id="settings-btn" onclick="event.stopPropagation();toggleSettings()">&#x2699;</button>
+      <div class="settings-menu" id="settings-menu">
+        <div class="settings-section">
+          <div class="settings-section-label">Device Name</div>
+          <div class="settings-row">
+            <input id="settings-device-name" type="text" placeholder="e.g. iPhone, Work laptop" autocomplete="off"
+              onchange="saveDeviceName(this.value)">
+          </div>
+          <div style="font-size:0.65rem;color:var(--dim);">Auto-detected: <span id="settings-device-auto"></span></div>
+        </div>
+        <div class="settings-sep"></div>
+        <div class="settings-section">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div class="settings-section-label" style="margin-bottom:0;">Servers</div>
+            <button class="btn" style="font-size:0.6rem;padding:1px 8px;" onclick="toggleSettingsAddServer()">+ Add</button>
+          </div>
+          <div id="settings-add-server" style="display:none;margin-top:8px;">
+            <input id="settings-new-server-name" class="search-input" type="text" placeholder="Label" style="width:100%;margin-bottom:4px;font-size:0.72rem;padding:5px 8px;box-sizing:border-box;">
+            <input id="settings-new-server-url" class="search-input" type="text" placeholder="https://host:8822" style="width:100%;margin-bottom:6px;font-size:0.72rem;padding:5px 8px;box-sizing:border-box;">
+            <div style="display:flex;gap:6px;justify-content:flex-end;">
+              <button class="btn" style="font-size:0.6rem;padding:1px 6px;" onclick="toggleSettingsAddServer()">Cancel</button>
+              <button class="btn" style="font-size:0.6rem;padding:1px 6px;background:var(--accent);color:#000;" onclick="saveSettingsNewServer()">Save</button>
+            </div>
+          </div>
+          <div id="settings-server-list" style="margin-top:6px;"></div>
+        </div>
+        <div class="settings-sep"></div>
+        <div class="settings-section" style="text-align:center;">
+          <span style="font-size:0.7rem;color:var(--dim);cursor:pointer;" onclick="openAbout();closeSettings()">About cmux &amp; token stats</span>
+        </div>
       </div>
     </div>
   </div>
@@ -4698,6 +4769,107 @@ function switchServer(idx) {
   const s = servers[idx];
   if (s) location.href = s.url;
 }
+
+// ═══════ SETTINGS DROPDOWN ═══════
+function toggleSettings() {
+  const menu = document.getElementById('settings-menu');
+  const open = menu.classList.toggle('open');
+  if (open) {
+    // Populate device name
+    const custom = localStorage.getItem('cmux_device_name') || '';
+    document.getElementById('settings-device-name').value = custom;
+    // Show auto-detected name
+    const ua = navigator.userAgent;
+    let auto = 'Unknown';
+    if (/iPhone/.test(ua)) auto = 'iPhone';
+    else if (/iPad/.test(ua)) auto = 'iPad';
+    else if (/Android/.test(ua)) auto = 'Android';
+    else if (/Windows/.test(ua)) auto = 'Windows';
+    else if (/Mac/.test(ua)) auto = 'Mac';
+    else if (/Linux/.test(ua)) auto = 'Linux';
+    document.getElementById('settings-device-auto').textContent = auto;
+    // Render servers
+    renderSettingsServerList();
+    // Close add form
+    document.getElementById('settings-add-server').style.display = 'none';
+  }
+}
+
+function closeSettings() {
+  document.getElementById('settings-menu').classList.remove('open');
+}
+
+function saveDeviceName(val) {
+  val = val.trim();
+  if (val) {
+    localStorage.setItem('cmux_device_name', val);
+  } else {
+    localStorage.removeItem('cmux_device_name');
+  }
+}
+
+function renderSettingsServerList() {
+  const el = document.getElementById('settings-server-list');
+  const servers = _getSavedServers();
+  const current = location.origin;
+  let html = '';
+  // Current server
+  html += '<div class="settings-server-item settings-server-current">';
+  html += '<div style="min-width:0;flex:1;">';
+  html += '<div class="settings-server-name" style="color:var(--accent);">' + esc(location.host) + '</div>';
+  html += '</div>';
+  html += '<span class="settings-server-badge">current</span>';
+  html += '</div>';
+  servers.forEach((s, i) => {
+    if (s.url.replace(/\/+$/, '') === current) return;
+    html += '<div class="settings-server-item" onclick="switchServer(' + i + ')">';
+    html += '<div style="min-width:0;flex:1;">';
+    html += '<div class="settings-server-name">' + esc(s.name || s.url.replace(/^https?:\/\//, '')) + '</div>';
+    if (s.name) html += '<div class="settings-server-url">' + esc(s.url.replace(/^https?:\/\//, '')) + '</div>';
+    html += '</div>';
+    html += '<button class="btn" style="font-size:0.55rem;padding:1px 5px;flex-shrink:0;margin-left:6px;" onclick="event.stopPropagation();removeServer(' + i + ');renderSettingsServerList()">&#x2715;</button>';
+    html += '</div>';
+  });
+  if (!servers.length || servers.every(s => s.url.replace(/\/+$/, '') === current)) {
+    html += '<div style="color:var(--dim);font-size:0.68rem;text-align:center;padding:4px 0;">No other servers</div>';
+  }
+  el.innerHTML = html;
+}
+
+function toggleSettingsAddServer() {
+  const form = document.getElementById('settings-add-server');
+  const visible = form.style.display !== 'none';
+  form.style.display = visible ? 'none' : 'block';
+  if (!visible) {
+    document.getElementById('settings-new-server-name').value = '';
+    document.getElementById('settings-new-server-url').value = '';
+    setTimeout(() => document.getElementById('settings-new-server-name').focus(), 50);
+  }
+}
+
+function saveSettingsNewServer() {
+  const name = document.getElementById('settings-new-server-name').value.trim();
+  let url = document.getElementById('settings-new-server-url').value.trim();
+  if (!url) { showToast('URL is required'); return; }
+  if (!/^https?:\/\//.test(url)) url = 'https://' + url;
+  url = url.replace(/\/+$/, '');
+  const servers = _getSavedServers();
+  if (servers.some(s => s.url.replace(/\/+$/, '') === url)) {
+    showToast('Server already saved');
+    return;
+  }
+  servers.push({ name: name || '', url });
+  _saveServers(servers);
+  document.getElementById('settings-add-server').style.display = 'none';
+  renderSettingsServerList();
+  showToast('Server saved');
+}
+
+// Close settings on outside click
+document.addEventListener('click', function(e) {
+  const wrap = document.querySelector('.settings-wrap');
+  if (wrap && !wrap.contains(e.target)) closeSettings();
+});
 
 function forceUpdate() {
   const el = document.getElementById('update-status');
