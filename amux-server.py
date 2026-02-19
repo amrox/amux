@@ -567,7 +567,7 @@ def _tmux_info_map() -> dict:
     try:
         r = subprocess.run(
             ["tmux", "list-panes", "-a", "-F",
-             "#{session_name}\t#{session_activity}\t#{session_created}\t#{pane_title}"],
+             "#{session_name}\t#{window_activity}\t#{session_created}\t#{pane_title}"],
             capture_output=True, text=True, timeout=5,
         )
         if r.returncode != 0:
