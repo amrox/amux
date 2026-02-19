@@ -2143,11 +2143,15 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <!-- Memory editor panel -->
   <div id="peek-memory-panel" class="peek-memory-editor">
     <div style="display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
-      <div style="font-size:0.78rem;color:var(--dim);">Shown to Claude every time this session resumes</div>
+      <div class="board-detail-tabs" style="border-bottom:none;margin:0;">
+        <button class="board-detail-tab active" id="pm-tab-edit" onclick="peekMemoryTab('edit')">Edit</button>
+        <button class="board-detail-tab" id="pm-tab-preview" onclick="peekMemoryTab('preview')">Preview</button>
+      </div>
       <button class="btn primary" id="peek-memory-save" onclick="savePeekMemory()">Save</button>
     </div>
     <textarea id="peek-memory-input" class="peek-memory-textarea"
       placeholder="No memory yet. Add notes, context, or conventions that Claude should always remember for this session..."></textarea>
+    <div id="peek-memory-preview" class="board-detail-preview" style="display:none;flex:1;overflow-y:auto;min-height:0;"></div>
   </div>
 </div>
 
@@ -3429,9 +3433,25 @@ function setPeekTab(tab) {
   if (tab === 'memory') { mem.classList.add('active'); loadPeekMemory(); }
   else { mem.classList.remove('active'); }
 }
+function peekMemoryTab(tab) {
+  document.getElementById('pm-tab-edit').classList.toggle('active', tab === 'edit');
+  document.getElementById('pm-tab-preview').classList.toggle('active', tab === 'preview');
+  const inp = document.getElementById('peek-memory-input');
+  const preview = document.getElementById('peek-memory-preview');
+  if (tab === 'preview') {
+    inp.style.display = 'none';
+    preview.style.display = '';
+    preview.innerHTML = renderMarkdown(inp.value) || '<span style="color:var(--dim);font-size:0.85rem;">Nothing to preview</span>';
+  } else {
+    inp.style.display = '';
+    preview.style.display = 'none';
+    inp.focus();
+  }
+}
 async function loadPeekMemory() {
   const inp = document.getElementById('peek-memory-input');
   const save = document.getElementById('peek-memory-save');
+  peekMemoryTab('edit'); // always start on edit tab
   inp.value = 'Loading...'; inp.disabled = true; save.disabled = true;
   try {
     const r = await fetch(API + '/api/sessions/' + peekSession + '/memory');
