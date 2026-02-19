@@ -787,6 +787,53 @@ def _session_mem_file(name: str) -> Path:
     return CC_MEMORY / f"{name}.md"
 
 
+def _session_work_dir(name: str) -> str:
+    """Return the CC_DIR for a session, or empty string if not configured."""
+    env_file = CC_SESSIONS / f"{name}.env"
+    if env_file.exists():
+        cfg = parse_env_file(env_file)
+        wd = cfg.get("CC_DIR", "").strip()
+        if wd:
+            return str(Path(wd).expanduser().resolve())
+    return ""
+
+
+def _migrate_memory_files():
+    """Startup migration: copy project-dir-keyed memory files to session-name-keyed.
+
+    Only migrates sessions where there is a 1:1 mapping between session and project dir,
+    and only when the session-keyed file is empty but the project-keyed file has content.
+    Sessions sharing a project dir start with empty memory (no ambiguous inheritance).
+    """
+    if not CC_SESSIONS.exists():
+        return
+    from collections import defaultdict
+    pname_to_sessions: dict = defaultdict(list)
+    for env_file in sorted(CC_SESSIONS.glob("*.env")):
+        name = env_file.stem
+        session_file = CC_MEMORY / f"{name}.md"
+        # Skip if session file already has content
+        if session_file.exists() and session_file.stat().st_size > 0:
+            continue
+        wd = _session_work_dir(name)
+        if not wd:
+            continue
+        pname = _project_name(wd)
+        old_file = CC_MEMORY / f"{pname}.md"
+        if old_file.exists() and old_file.stat().st_size > 0:
+            pname_to_sessions[pname].append(name)
+    for pname, sessions in pname_to_sessions.items():
+        if len(sessions) == 1:
+            name = sessions[0]
+            old_file = CC_MEMORY / f"{pname}.md"
+            new_file = CC_MEMORY / f"{name}.md"
+            if not new_file.exists() or new_file.stat().st_size == 0:
+                new_file.write_text(old_file.read_text(errors="replace"))
+
+
+_migrate_memory_files()
+
+
 def _ensure_memory(name: str, work_dir: str):
     """Ensure a per-session memory file exists and is symlinked into Claude's project path.
 
@@ -6641,6 +6688,9 @@ class CCHandler(BaseHTTPRequestHandler):
                 return self._json(stats)
             if action == "memory":
                 mem_file = _session_mem_file(name)
+                wd = _session_work_dir(name)
+                if wd:
+                    _ensure_memory(name, wd)
                 content = mem_file.read_text(errors="replace") if mem_file.exists() else ""
                 return self._json({"content": content, "path": str(mem_file)})
             return self._json({"error": "not found"}, 404)
@@ -6664,6 +6714,9 @@ class CCHandler(BaseHTTPRequestHandler):
                 body = self._read_body()
                 content = body.get("content", "")
                 mem_file = _session_mem_file(name)
+                wd = _session_work_dir(name)
+                if wd:
+                    _ensure_memory(name, wd)
                 mem_file.write_text(content)
                 return self._json({"ok": True})
             if action == "start":
