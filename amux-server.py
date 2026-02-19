@@ -5214,7 +5214,7 @@ function _renderBoardCard(item) {
   const tags = item.tags || [];
   const firstLine = (item.desc || '').split('\n')[0].slice(0, 80);
   let h = '<div class="board-card" data-id="' + item.id + '" onclick="openBoardDetail(\'' + item.id + '\')">';
-  if (item.key) h += '<div class="board-card-key">' + esc(item.key) + '</div>';
+  h += '<div class="board-card-key">' + esc(item.id) + '</div>';
   h += '<div class="board-card-title">';
   if (boardViewMode === 'session') { const _st = item.status || 'todo'; h += '<span class="board-status-dot" style="background:' + statusStyle(_st).dot + '"></span>'; }
   h += esc(item.title) + '</div>';
@@ -5295,7 +5295,7 @@ function renderBoard() {
     visible = visible.filter(i =>
       (i.title || '').toLowerCase().includes(q) ||
       (i.desc || '').toLowerCase().includes(q) ||
-      (i.key || '').toLowerCase().includes(q) ||
+      (i.id || '').toLowerCase().includes(q) ||
       (i.session || '').toLowerCase().includes(q) ||
       (i.tags || []).some(t => t.toLowerCase().includes(q))
     );
@@ -5454,7 +5454,7 @@ function openBoardAdd(status) {
   const sel = document.getElementById('be-status');
   sel.innerHTML = boardStatuses.map(s => '<option value="' + s.id + '">' + esc(s.label) + '</option>').join('');
   sel.value = status;
-  _populateSessionSelect('be-session-add', '');
+  _populateSessionSelect('be-session-add', peekSession || '');
   document.getElementById('board-edit-overlay').classList.add('active');
   document.getElementById('be-title').focus();
 }
@@ -5495,7 +5495,7 @@ function openBoardDetail(id) {
   document.getElementById('bd-desc').value = draft ? draft.desc : (item.desc || '');
   _renderDetailStatusBtns();
   const keyEl = document.getElementById('bd-key');
-  if (keyEl) keyEl.textContent = item.key || '';
+  if (keyEl) keyEl.textContent = item.id || '';
   _populateSessionSelect('bd-session', draft ? draft.session : (item.session || ''));
   boardDetailTab('edit');
   const meta = document.getElementById('bd-meta');
@@ -6932,8 +6932,7 @@ class CCHandler(BaseHTTPRequestHandler):
                 n = counters.get(prefix, 0) + 1
                 counters[prefix] = n
                 item = {
-                    "id": os.urandom(3).hex(),
-                    "key": f"{prefix}-{n}",
+                    "id": f"{prefix}-{n}",
                     "title": title,
                     "desc": body.get("desc", "").strip(),
                     "status": body.get("status", "todo"),
@@ -7007,7 +7006,7 @@ class CCHandler(BaseHTTPRequestHandler):
                     return self._json({"ok": True})
 
             # PATCH/DELETE /api/board/<id>
-            board_m = re.match(r"^/api/board/([a-f0-9]+)$", path)
+            board_m = re.match(r"^/api/board/([A-Za-z0-9_-]+)$", path)
             if board_m:
                 bid = board_m.group(1)
                 items = _load_board()
