@@ -1408,6 +1408,26 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .explore-size { font-size: 0.72rem; color: var(--dim); flex-shrink: 0; }
 
   /* Connect session list */
+  /* Calendar */
+  .cal-toolbar { display: flex; align-items: center; gap: 6px; padding: 10px 12px 6px; }
+  .cal-title { font-weight: 600; font-size: 0.95rem; flex: 1; text-align: center; }
+  .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; background: var(--border); border-radius: 8px; overflow: hidden; margin: 0 8px 16px; }
+  .cal-day-header { background: var(--card); text-align: center; font-size: 0.68rem; color: var(--dim); padding: 5px 2px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+  .cal-cell { background: var(--card); min-height: 76px; padding: 4px; position: relative; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .cal-cell:active { background: var(--hover); }
+  .cal-cell.other-month { background: rgba(0,0,0,0.15); }
+  .cal-cell.other-month .cal-cell-num { opacity: 0.35; }
+  .cal-cell-num { font-size: 0.75rem; color: var(--dim); margin-bottom: 3px; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; border-radius: 50%; }
+  .cal-cell.today .cal-cell-num { background: var(--accent); color: #fff; font-weight: 700; }
+  .cal-chip { font-size: 0.66rem; line-height: 1.25; padding: 2px 4px; border-radius: 3px; margin-bottom: 2px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; display: block; }
+  .cal-chip:active { opacity: 0.7; }
+  .cal-more { font-size: 0.62rem; color: var(--dim); padding-left: 2px; }
+  @media (max-width: 480px) {
+    .cal-cell { min-height: 52px; }
+    .cal-chip { font-size: 0.6rem; padding: 1px 3px; }
+    .cal-title { font-size: 0.9rem; }
+    .cal-toolbar .btn { padding: 5px 8px; font-size: 0.8rem; }
+  }
   .skill-card {
     background: var(--card); border: 1px solid var(--border); border-radius: 8px;
     padding: 12px 14px; display: flex; flex-direction: column; gap: 4px;
@@ -2225,6 +2245,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <div class="tab-bar">
   <button id="tab-sessions" class="active" onclick="switchView('sessions')">Sessions</button>
   <button id="tab-board" onclick="switchView('board')">Board</button>
+  <button id="tab-calendar" onclick="switchView('calendar')">Calendar</button>
 </div>
 <div id="session-view">
 <div style="padding:0 12px;margin-top:4px;display:flex;align-items:center;gap:8px;">
@@ -2263,6 +2284,18 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <div class="board-filters" id="board-filters"></div>
   <div class="board-columns" id="board-columns"></div>
 </div>
+<!-- Calendar view -->
+<div id="calendar-view" style="display:none;">
+  <div class="cal-toolbar">
+    <button class="btn" onclick="calPrev()">&#x2039;</button>
+    <span id="cal-title" class="cal-title"></span>
+    <button class="btn" onclick="calNext()">&#x203A;</button>
+    <button class="btn" id="cal-today-btn" onclick="calToday()" style="margin-left:4px;">Today</button>
+    <a class="btn" href="/api/calendar.ics" target="_blank" title="Subscribe (iCal)" style="margin-left:auto;font-size:0.8rem;">&#x1F4C5; iCal</a>
+  </div>
+  <div id="cal-grid" class="cal-grid"></div>
+</div>
+
 <!-- Board card "add" small modal -->
 <div id="board-edit-overlay" class="board-edit-overlay" onclick="if(event.target===this)closeBoardEdit()">
   <div class="board-edit-box">
@@ -2282,6 +2315,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="field-group">
       <label class="field-label">Status</label>
       <select id="be-status"><option value="todo">To Do</option><option value="doing">In Progress</option><option value="done">Done</option></select>
+    </div>
+    <div class="field-group">
+      <label class="field-label">Due date <span class="field-optional">(optional)</span></label>
+      <input id="be-due" type="date">
     </div>
     <div class="board-edit-actions">
       <button class="be-cancel" onclick="closeBoardEdit()">Cancel</button>
@@ -2305,6 +2342,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="board-detail-row">
       <span style="font-size:0.78rem;color:var(--dim);">Session:</span>
       <select id="bd-session" class="board-detail-session-select"></select>
+    </div>
+    <div class="board-detail-row">
+      <span style="font-size:0.78rem;color:var(--dim);">Due:</span>
+      <input type="date" id="bd-due" class="board-detail-session-select" style="flex:1;cursor:pointer;">
     </div>
     <div class="board-detail-tabs">
       <button class="board-detail-tab active" id="bd-tab-edit" onclick="boardDetailTab('edit')">Edit</button>
@@ -5069,13 +5110,17 @@ function switchView(view) {
   activeView = view;
   document.getElementById('session-view').style.display = view === 'sessions' ? '' : 'none';
   document.getElementById('board-view').style.display = view === 'board' ? '' : 'none';
+  document.getElementById('calendar-view').style.display = view === 'calendar' ? '' : 'none';
   document.getElementById('tab-sessions').classList.toggle('active', view === 'sessions');
   document.getElementById('tab-board').classList.toggle('active', view === 'board');
+  document.getElementById('tab-calendar').classList.toggle('active', view === 'calendar');
   if (view === 'board') {
     renderBoard();
     fetchBoard();
     // Only poll if SSE is not active (SSE pushes board updates)
     if (_sseFallback && !boardTimer) boardTimer = setInterval(fetchBoard, 5000);
+  } else if (view === 'calendar') {
+    fetchBoard().then(() => renderCalendar());
   } else {
     if (boardTimer) { clearInterval(boardTimer); boardTimer = null; }
   }
@@ -5262,6 +5307,7 @@ function _renderBoardCard(item) {
   h += '<div class="board-card-footer">';
   if (boardViewMode !== 'session' && item.session) h += '<span class="board-card-session" data-session="' + esc(item.session) + '">' + esc(item.session) + '</span>';
   tags.forEach(function(t) { h += '<span class="board-card-tag" data-tag="' + esc(t) + '">' + esc(t) + '</span>'; });
+  if (item.due) { const today = new Date().toISOString().slice(0,10); const overdue = item.due < today && item.status !== 'done'; h += '<span class="board-card-time" style="' + (overdue ? 'color:var(--red)' : 'color:var(--accent)') + '">&#x1F4C5; ' + item.due + '</span>'; }
   h += '<span class="board-card-time">' + timeAgo(item.updated || item.created) + '</span>';
   if (item.creator) h += '<span class="board-card-time">' + esc(item.creator) + '</span>';
   h += '</div></div>';
@@ -5488,11 +5534,20 @@ function _populateSessionSelect(selectId, current) {
   if (current) sel.value = current;
 }
 
-function openBoardAdd(status) {
+function openBoardAdd(statusOrDate, prefillDate) {
+  // statusOrDate: can be a status string ('todo','doing','done') or a YYYY-MM-DD date (from calendar cell click)
+  let status = 'todo', dueDate = prefillDate || '';
+  if (statusOrDate && /^\d{4}-\d{2}-\d{2}$/.test(statusOrDate)) {
+    dueDate = statusOrDate;
+  } else if (statusOrDate) {
+    status = statusOrDate;
+  }
   boardEditId = null;
   boardEditStatus = status;
   document.getElementById('be-title').value = '';
   document.getElementById('be-desc').value = '';
+  const dueEl = document.getElementById('be-due');
+  if (dueEl) dueEl.value = dueDate;
   const sel = document.getElementById('be-status');
   sel.innerHTML = boardStatuses.map(s => '<option value="' + s.id + '">' + esc(s.label) + '</option>').join('');
   sel.value = status;
@@ -5515,8 +5570,10 @@ async function saveBoardEdit() {
   const session = sel ? sel.value : '';
   const sess = sessions.find(s => s.name === session);
   const tags = sess ? (sess.tags || []) : [];
+  const dueEl = document.getElementById('be-due');
+  const due = dueEl ? dueEl.value : '';
   closeBoardEdit();
-  await addBoardItem(title, desc, status, session, tags);
+  await addBoardItem(title, desc, status, session, tags, due);
 }
 
 // ── Board detail (full-screen) ──
@@ -5539,6 +5596,8 @@ function openBoardDetail(id) {
   const keyEl = document.getElementById('bd-key');
   if (keyEl) keyEl.textContent = item.id || '';
   _populateSessionSelect('bd-session', draft ? draft.session : (item.session || ''));
+  const dueEl = document.getElementById('bd-due');
+  if (dueEl) dueEl.value = draft ? (draft.due || '') : (item.due || '');
   boardDetailTab('edit');
   const meta = document.getElementById('bd-meta');
   const parts = [];
@@ -5598,9 +5657,11 @@ function closeBoardDetail() {
       const sel = document.getElementById('bd-session');
       const s = sel ? sel.value : (item.session || '');
       const st = boardDetailStatus;
+      const dueEl = document.getElementById('bd-due');
+      const due = dueEl ? dueEl.value : (item.due || '');
       // Only save draft if something actually differs from saved state
-      if (t !== (item.title || '') || d !== (item.desc || '') || s !== (item.session || '') || st !== (item.status || 'todo')) {
-        _boardDrafts[boardDetailId] = { title: t, desc: d, session: s, status: st };
+      if (t !== (item.title || '') || d !== (item.desc || '') || s !== (item.session || '') || st !== (item.status || 'todo') || due !== (item.due || '')) {
+        _boardDrafts[boardDetailId] = { title: t, desc: d, session: s, status: st, due };
       } else {
         delete _boardDrafts[boardDetailId];
       }
@@ -5650,7 +5711,8 @@ async function boardDetailSave() {
   const sel = document.getElementById('bd-session');
   const session = sel ? sel.value : undefined;
   document.getElementById('bd-save-status').textContent = 'Saving...';
-  const changes = { title, desc, status: boardDetailStatus };
+  const dueInput = document.getElementById('bd-due');
+  const changes = { title, desc, status: boardDetailStatus, due: dueInput ? dueInput.value : '' };
   if (session !== undefined) {
     changes.session = session;
     const item = boardItems.find(i => i.id === boardDetailId);
@@ -5690,16 +5752,16 @@ function saveBoardCache() {
   localStorage.setItem('amux_board_cache', lastBoardJSON);
 }
 
-async function addBoardItem(title, desc, status, session, tags) {
+async function addBoardItem(title, desc, status, session, tags, due) {
   const tempId = Math.random().toString(16).slice(2, 8);
   const now = Math.floor(Date.now() / 1000);
-  const tempItem = { id: tempId, title, desc, status, session: session || '', tags: tags || [], creator: _getDeviceName(), created: now, updated: now, _pending: true };
+  const tempItem = { id: tempId, title, desc, status, session: session || '', tags: tags || [], due: due || '', creator: _getDeviceName(), created: now, updated: now, _pending: true };
   boardItems.push(tempItem);
   saveBoardCache();
   renderBoard();
   const r = await apiCall(API + '/api/board', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ title, desc, status, session: session || '', tags: tags || [], creator: _getDeviceName() })
+    body: JSON.stringify({ title, desc, status, session: session || '', tags: tags || [], due: due || '', creator: _getDeviceName() })
   });
   if (r) {
     const item = await r.json();
@@ -5806,6 +5868,70 @@ async function deleteBoardStatus(id) {
   }
 }
 
+
+// ═══════ CALENDAR ═══════
+let calYear = new Date().getFullYear();
+let calMonth = new Date().getMonth(); // 0-indexed
+
+function calPrev() { calMonth--; if (calMonth < 0) { calMonth = 11; calYear--; } renderCalendar(); }
+function calNext() { calMonth++; if (calMonth > 11) { calMonth = 0; calYear++; } renderCalendar(); }
+function calToday() { calYear = new Date().getFullYear(); calMonth = new Date().getMonth(); renderCalendar(); }
+
+function renderCalendar() {
+  const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const titleEl = document.getElementById('cal-title');
+  const gridEl = document.getElementById('cal-grid');
+  if (!titleEl || !gridEl) return;
+  titleEl.textContent = monthNames[calMonth] + ' ' + calYear;
+  const today = new Date();
+  const todayStr = today.getFullYear() + '-' + String(today.getMonth()+1).padStart(2,'0') + '-' + String(today.getDate()).padStart(2,'0');
+  const firstDay = new Date(calYear, calMonth, 1).getDay(); // 0=Sun
+  const daysInMonth = new Date(calYear, calMonth+1, 0).getDate();
+  const daysInPrevMonth = new Date(calYear, calMonth, 0).getDate();
+  // Build date → items map
+  const itemsByDate = {};
+  boardItems.forEach(item => {
+    if (item.due) {
+      if (!itemsByDate[item.due]) itemsByDate[item.due] = [];
+      itemsByDate[item.due].push(item);
+    }
+  });
+  let html = '';
+  dayNames.forEach(d => { html += '<div class="cal-day-header">' + d + '</div>'; });
+  const totalCells = Math.ceil((firstDay + daysInMonth) / 7) * 7;
+  for (let i = 0; i < totalCells; i++) {
+    let day, dateStr, isOther = false;
+    if (i < firstDay) {
+      day = daysInPrevMonth - firstDay + i + 1;
+      const m = calMonth === 0 ? 12 : calMonth;
+      const y = calMonth === 0 ? calYear - 1 : calYear;
+      dateStr = y + '-' + String(m).padStart(2,'0') + '-' + String(day).padStart(2,'0');
+      isOther = true;
+    } else if (i >= firstDay + daysInMonth) {
+      day = i - firstDay - daysInMonth + 1;
+      const m = calMonth === 11 ? 1 : calMonth + 2;
+      const y = calMonth === 11 ? calYear + 1 : calYear;
+      dateStr = y + '-' + String(m).padStart(2,'0') + '-' + String(day).padStart(2,'0');
+      isOther = true;
+    } else {
+      day = i - firstDay + 1;
+      dateStr = calYear + '-' + String(calMonth+1).padStart(2,'0') + '-' + String(day).padStart(2,'0');
+    }
+    const isToday = dateStr === todayStr;
+    const items = itemsByDate[dateStr] || [];
+    const safeDate = dateStr;
+    html += '<div class="cal-cell' + (isOther ? ' other-month' : '') + (isToday ? ' today' : '') + '" onclick="openBoardAdd(\'' + safeDate + '\')">';
+    html += '<div class="cal-cell-num">' + day + '</div>';
+    items.slice(0, 3).forEach(item => {
+      const sty = statusStyle(item.status || 'todo');
+      html += '<div class="cal-chip" style="background:' + sty.bg + ';color:' + sty.color + '" onclick="event.stopPropagation();openBoardDetail(\'' + item.id + '\')" title="' + esc(item.title) + '">' + esc(item.title) + '</div>';
+    });
+    if (items.length > 3) html += '<div class="cal-more">+' + (items.length - 3) + ' more</div>';
+    html += '</div>';
+  }
+  gridEl.innerHTML = html;
+}
 
 // ═══════ INIT ═══════
 // Load cached sessions immediately so offline startup renders content
@@ -7047,6 +7173,7 @@ class CCHandler(BaseHTTPRequestHandler):
                     "status": body.get("status", "todo"),
                     "session": session,
                     "tags": body.get("tags", []),
+                    "due": body.get("due", ""),
                     "creator": body.get("creator", ""),
                     "created": int(time.time()),
                     "updated": int(time.time()),
@@ -7125,7 +7252,7 @@ class CCHandler(BaseHTTPRequestHandler):
 
                 if method == "PATCH":
                     body = self._read_body()
-                    for k in ("title", "desc", "status", "session", "tags"):
+                    for k in ("title", "desc", "status", "session", "tags", "due"):
                         if k in body:
                             items[idx][k] = body[k]
                     items[idx]["updated"] = int(time.time())
@@ -7138,6 +7265,45 @@ class CCHandler(BaseHTTPRequestHandler):
                     return self._json({"ok": True, "deleted": removed["id"]})
 
             return self._json({"error": "not found"}, 404)
+
+        # GET /api/calendar.ics — iCal subscription feed
+        if method == "GET" and path == "/api/calendar.ics":
+            items = [i for i in _load_board() if i.get("due")]
+            lines = [
+                "BEGIN:VCALENDAR",
+                "VERSION:2.0",
+                "PRODID:-//amux//amux calendar//EN",
+                "CALSCALE:GREGORIAN",
+                "METHOD:PUBLISH",
+                "X-WR-CALNAME:amux Board",
+                "X-WR-CALDESC:amux board items with due dates",
+            ]
+            status_map = {"todo": "NEEDS-ACTION", "doing": "IN-PROCESS", "done": "COMPLETED"}
+            for item in items:
+                due = item["due"]  # YYYY-MM-DD
+                date_val = due.replace("-", "")
+                uid = item["id"] + "@amux"
+                summary = item.get("title", "").replace(",", "\\,").replace(";", "\\;").replace("\n", "\\n")
+                desc = item.get("desc", "").replace(",", "\\,").replace(";", "\\;").replace("\n", "\\n")
+                vstatus = status_map.get(item.get("status", "todo"), "NEEDS-ACTION")
+                lines += [
+                    "BEGIN:VEVENT",
+                    f"UID:{uid}",
+                    f"DTSTART;VALUE=DATE:{date_val}",
+                    f"DTEND;VALUE=DATE:{date_val}",
+                    f"SUMMARY:{summary}",
+                    f"DESCRIPTION:{desc}",
+                    f"STATUS:{vstatus}",
+                    "END:VEVENT",
+                ]
+            lines.append("END:VCALENDAR")
+            ical_text = "\r\n".join(lines) + "\r\n"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/calendar; charset=utf-8")
+            self.send_header("Content-Disposition", 'attachment; filename="amux.ics"')
+            self.end_headers()
+            self.wfile.write(ical_text.encode("utf-8"))
+            return
 
         # GET /api/tmux-sessions (unregistered tmux sessions)
         if method == "GET" and path == "/api/tmux-sessions":
