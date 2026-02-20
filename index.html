@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>amux — Agent Multiplexer</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
   <meta name="description" content="Run, monitor, and orchestrate dozens of Claude Code sessions from your browser, phone, or terminal. Open source.">
   <meta property="og:title" content="amux — Agent Multiplexer">
   <meta property="og:description" content="Run, monitor, and orchestrate dozens of Claude Code sessions from your browser, phone, or terminal. Open source.">
@@ -74,17 +75,14 @@
       width: 36px;
       height: 36px;
       border-radius: 8px;
-      background: var(--accent);
-      display: flex;
-      align-items: center;
-      justify-content: center;
       flex-shrink: 0;
+      overflow: hidden;
     }
 
-    .wordmark-icon svg {
-      width: 20px;
-      height: 20px;
-      color: #0a0a0a;
+    .wordmark-icon img {
+      width: 36px;
+      height: 36px;
+      display: block;
     }
 
     .wordmark h1 {
@@ -280,13 +278,7 @@
   <div class="hero">
     <div class="wordmark">
       <div class="wordmark-icon">
-        <!-- multiplexer grid icon -->
-        <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-          <rect x="2" y="2" width="6" height="6" rx="1"/>
-          <rect x="12" y="2" width="6" height="6" rx="1"/>
-          <rect x="2" y="12" width="6" height="6" rx="1"/>
-          <rect x="12" y="12" width="6" height="6" rx="1"/>
-        </svg>
+        <img src="icon.svg" alt="amux icon">
       </div>
       <h1>amux</h1>
     </div>
@@ -359,6 +351,13 @@
         <path fill-rule="evenodd" d="M4 2a2 2 0 00-2 2v11a3 3 0 106 0V4a2 2 0 00-2-2H4zm1 14a1 1 0 100-2 1 1 0 000 2zm5-1.757l4.9-4.9a2 2 0 000-2.828L13.485 5.1a2 2 0 00-2.828 0L10 5.757v8.486zM16 18H9.071l6-6H16a2 2 0 012 2v2a2 2 0 01-2 2z" clip-rule="evenodd"/>
       </svg>
       <div><strong>Live peek &amp; control</strong> <span>— scroll through any agent's full output, search it, send slash commands, and use quick-action chips (Ctrl-C, /compact, /clear) without leaving the dashboard.</span></div>
+    </li>
+
+    <li>
+      <svg class="feat-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+        <path fill-rule="evenodd" d="M8 4a3 3 0 00-3 3v4a5 5 0 0010 0V7a1 1 0 112 0v4a7 7 0 11-14 0V7a5 5 0 0110 0v4a3 3 0 11-6 0V7a1 1 0 012 0v4a1 1 0 102 0V7a3 3 0 00-3-3z" clip-rule="evenodd"/>
+      </svg>
+      <div><strong>File attachments</strong> <span>— send files directly to any agent. Paste an image with Ctrl-V, drag and drop onto the send bar, or click the 📎 button. Supports images, PDFs, text, CSV, JSON, and more.</span></div>
     </li>
 
     <li>

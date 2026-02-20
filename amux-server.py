@@ -1599,6 +1599,14 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     font-size: 0.78rem; line-height: 1.5; white-space: pre-wrap;
     word-break: break-word; -webkit-overflow-scrolling: touch;
   }
+  .file-overlay-body.file-image { display:flex;align-items:center;justify-content:center;background:var(--bg);white-space:normal; }
+  .file-overlay-body.file-pdf { padding:0;background:var(--bg);white-space:normal; }
+  .file-overlay-body.file-csv { white-space:normal;overflow:auto; }
+  .csv-wrap { overflow:auto; }
+  .csv-table { border-collapse:collapse;font-size:0.78rem;width:max-content;min-width:100%; }
+  .csv-table th,.csv-table td { border:1px solid var(--border);padding:4px 10px;text-align:left;white-space:nowrap; }
+  .csv-table th { background:var(--card);font-weight:600;position:sticky;top:0;z-index:1; }
+  .csv-table tr:nth-child(even) td { background:rgba(255,255,255,0.02); }
   .file-overlay-body.markdown { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 0.88rem; }
   .file-overlay-body.markdown h1, .file-overlay-body.markdown h2, .file-overlay-body.markdown h3 { margin: 16px 0 8px 0; font-weight: 700; }
   .file-overlay-body.markdown h1 { font-size: 1.3rem; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
@@ -4953,6 +4961,26 @@ function clearPeekSearch() {
 }
 
 // ── File preview ──
+function renderCsvTable(csv) {
+  const lines = csv.split('\n').filter(l => l.trim());
+  if (!lines.length) return '<em style="color:var(--dim)">Empty file</em>';
+  const parseLine = line => {
+    const cells = []; let cur = '', inQ = false;
+    for (const ch of line) {
+      if (ch === '"') { inQ = !inQ; }
+      else if (ch === ',' && !inQ) { cells.push(cur); cur = ''; }
+      else { cur += ch; }
+    }
+    cells.push(cur);
+    return cells.map(c => c.trim().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'));
+  };
+  const header = parseLine(lines[0]);
+  const rows = lines.slice(1).map(parseLine);
+  const thead = '<tr>' + header.map(h => `<th>${h}</th>`).join('') + '</tr>';
+  const tbody = rows.map(r => '<tr>' + r.map(c => `<td>${c}</td>`).join('') + '</tr>').join('');
+  return `<div class="csv-wrap"><table class="csv-table"><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>`;
+}
+
 async function openFilePreview(path) {
   document.getElementById('file-title').textContent = path.split('/').pop();
   document.getElementById('file-body').textContent = 'Loading...';
@@ -4968,9 +4996,27 @@ async function openFilePreview(path) {
       return;
     }
     const body = document.getElementById('file-body');
-    if (data.is_markdown) {
+    if (data.is_image) {
+      body.className = 'file-overlay-body file-image';
+      const img = document.createElement('img');
+      img.src = data.data_url;
+      img.alt = path.split('/').pop();
+      img.style.cssText = 'max-width:100%;height:auto;border-radius:4px;display:block;margin:auto;';
+      body.innerHTML = '';
+      body.appendChild(img);
+    } else if (data.is_pdf) {
+      body.className = 'file-overlay-body file-pdf';
+      body.innerHTML = `<embed src="${data.data_url}" type="application/pdf" style="width:100%;height:100%;min-height:520px;border-radius:4px;">`;
+    } else if (data.is_csv) {
+      body.className = 'file-overlay-body file-csv';
+      body.innerHTML = renderCsvTable(data.content);
+    } else if (data.is_markdown) {
       body.className = 'file-overlay-body markdown';
       body.innerHTML = renderMarkdown(data.content);
+    } else if (data.is_html) {
+      // Show HTML source highlighted as plain text
+      body.className = 'file-overlay-body';
+      body.textContent = data.content;
     } else {
       body.className = 'file-overlay-body';
       body.textContent = data.content;
@@ -5554,7 +5600,10 @@ function renderMarkdown(raw) {
     s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
     s = s.replace(/_(.+?)_/g, '<em>$1</em>');
     s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
-    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, url) => {
+      const safe = /^(https?:\/\/|\/|#)/.test(url) ? url : '#';
+      return `<a href="${safe}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+    });
     s = s.replace(/^---$/gm, '<hr>');
     s = s.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
     s = s.replace(/((?:^[-*] .+\n?)+)/gm, (block) => {
@@ -7185,6 +7234,8 @@ class CCHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "SAMEORIGIN")
 
     def _json(self, data, status=200):
         body = json.dumps(data).encode()
@@ -7435,12 +7486,37 @@ class CCHandler(BaseHTTPRequestHandler):
             if not p.is_file():
                 return self._json({"error": "file not found"}, 404)
             try:
+                import base64
+                ext = p.suffix.lower()
+                IMAGE_MIMES = {
+                    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                    ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml",
+                    ".bmp": "image/bmp", ".ico": "image/x-icon",
+                }
+                if ext in IMAGE_MIMES:
+                    raw = p.read_bytes()
+                    if len(raw) > 5_000_000:
+                        return self._json({"error": "Image too large (>5 MB)"}, 400)
+                    mime = IMAGE_MIMES[ext]
+                    data_url = f"data:{mime};base64,{base64.b64encode(raw).decode()}"
+                    return self._json({"path": str(p), "is_image": True, "data_url": data_url, "mime": mime})
+                if ext == ".pdf":
+                    raw = p.read_bytes()
+                    if len(raw) > 10_000_000:
+                        return self._json({"error": "PDF too large (>10 MB)"}, 400)
+                    data_url = f"data:application/pdf;base64,{base64.b64encode(raw).decode()}"
+                    return self._json({"path": str(p), "is_pdf": True, "data_url": data_url})
                 content = p.read_text(errors="replace")
-                # Limit to 100KB for safety
-                if len(content) > 100_000:
-                    content = content[:100_000] + "\n\n... (truncated at 100KB)"
-                is_md = p.suffix.lower() in (".md", ".markdown", ".mdx")
-                return self._json({"path": str(p), "content": content, "is_markdown": is_md})
+                # Limit to 200KB for safety
+                if len(content) > 200_000:
+                    content = content[:200_000] + "\n\n... (truncated at 200KB)"
+                is_md = ext in (".md", ".markdown", ".mdx")
+                is_csv = ext == ".csv"
+                is_html = ext in (".html", ".htm")
+                return self._json({
+                    "path": str(p), "content": content,
+                    "is_markdown": is_md, "is_csv": is_csv, "is_html": is_html,
+                })
             except Exception as e:
                 return self._json({"error": str(e)}, 500)
 

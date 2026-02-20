@@ -82,6 +82,7 @@ amux serve 9000      # custom port
 - **File preview** — clickable file paths in peek output open syntax-highlighted previews
 - **Peek search** — find text within peek output with match highlighting and count
 - **Peek command bar** — send commands directly from peek mode with slash autocomplete
+- **File attachments** — send files to agents directly from the dashboard: paste an image with Ctrl-V, drag and drop onto the send bar, or click the 📎 attachment button. Supports images, PDFs, text, CSV, JSON, and log files
 - **Connect tmux sessions** — adopt existing tmux sessions not created by amux
 
 ### Board (Kanban)
@@ -106,7 +107,7 @@ curl -sk -X POST -H 'Content-Type: application/json' \
 curl -sk https://localhost:8822/api/board
 ```
 
-Board data is stored in `~/.amux/board.json`.
+Board data is stored in `~/.amux/amux.db` (SQLite, WAL mode).
 
 ### Real-Time Updates (SSE)
 
@@ -220,7 +221,9 @@ amux periodically snapshots all running sessions to `~/.amux/logs/` (every 60s, 
   sessions/            # session .env files (CC_DIR, CC_FLAGS, etc.)
   logs/                # session scrollback snapshots
   tls/                 # auto-generated TLS certs
-  board.json           # kanban board data
+  amux.db              # SQLite database (board, statuses, tasks)
+  uploads/             # file attachments sent to agents
+  memory/              # per-session and global memory files
   token_baseline.json  # token counter reset baseline
   defaults.env         # global default flags
 ```
@@ -253,6 +256,18 @@ CC_DESC="Main backend work"
 CC_TAGS="backend,api"
 CC_PINNED="1"
 ```
+
+## Security
+
+amux is a **local-first tool** designed to run on your machine, accessed over Tailscale or localhost. It has no built-in authentication because it assumes network-level trust:
+
+- **Network access** — use Tailscale (recommended) or bind to localhost only (`amux serve --no-public`). Never expose port 8822 directly to the internet.
+- **File access** — the `/api/file` endpoint reads any path the server user can access. This is intentional for peek file previews. Treat amux like any local dev server.
+- **CORS** — wildcard CORS is set to allow API calls from any origin. This is fine for a local tool but means any local webpage could call the API if the server is reachable.
+- **Board data** — stored in `~/.amux/amux.db` (SQLite), not exposed as a file endpoint.
+- **Uploads** — files sent to agents are stored in `~/.amux/uploads/` and referenced by path.
+
+For cloud deployments, the [GCP setup](cloud/) creates a VM that blocks all inbound internet traffic except Tailscale UDP. The dashboard is only reachable through your Tailscale network.
 
 ## Architecture
 
