@@ -2651,6 +2651,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
           <div class="chip" onclick="peekQuickKeys('Down')">&#x2193;</div>
           <div class="chip" onclick="peekQuickKeys('Enter')">Enter</div>
           <div class="chip" onclick="peekQuickSend('/clear')">/clear</div>
+          <div class="chip" onclick="peekQuickSend('/mcp')">/mcp</div>
           <div class="chip" onclick="peekQuickSend('/compact')">/compact</div>
           <div class="chip" onclick="peekQuickSend('/status')">/status</div>
           <div class="chip" onclick="peekQuickSend('/cost')">/cost</div>
