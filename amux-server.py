@@ -1642,9 +1642,16 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .cal-chip { font-size: 0.66rem; line-height: 1.25; padding: 2px 4px; border-radius: 3px; margin-bottom: 2px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; display: block; }
   .cal-chip:active { opacity: 0.7; }
   .cal-more { font-size: 0.62rem; color: var(--dim); padding-left: 2px; }
+  .cal-dots { display: none; gap: 3px; flex-wrap: wrap; padding: 3px 1px 0; }
+  .cal-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
   @media (max-width: 480px) {
-    .cal-cell { min-height: 52px; }
-    .cal-chip { font-size: 0.6rem; padding: 1px 3px; }
+    .cal-grid { margin: 0 0 12px; border-radius: 0; gap: 0; background: none; border-top: 1px solid var(--border); border-left: 1px solid var(--border); }
+    .cal-cell { min-height: unset; aspect-ratio: 1; padding: 3px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); overflow: hidden; }
+    .cal-day-header { font-size: 0.65rem; padding: 6px 2px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+    .cal-cell-num { font-size: 0.7rem; width: 18px; height: 18px; margin-bottom: 0; }
+    .cal-chip { display: none; }
+    .cal-more { display: none; }
+    .cal-dots { display: flex; }
     .cal-title { font-size: 0.9rem; }
     .cal-toolbar .btn { padding: 5px 8px; font-size: 0.8rem; }
   }
@@ -5342,23 +5349,25 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   if (!document.getElementById('peek-overlay').classList.contains('active')) return;
-  if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && (e.key === 'c' || e.key === 'v')) {
-    // Always preventDefault to suppress browser beep on non-editable elements
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 'c' || e.key === 'v')) {
+    const active = document.activeElement;
+    const isEditable = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable);
+    // Let the browser handle copy/paste natively inside editable elements
+    if (isEditable) return;
+    // For non-editable areas (e.g. terminal output): suppress beep and handle manually
     e.preventDefault();
     if (e.key === 'c') {
       const sel = window.getSelection();
       if (sel && sel.toString().length > 0) navigator.clipboard.writeText(sel.toString());
-      // No selection → silently ignore (no beep)
     } else {
-      // Ctrl+V: paste into focused input, or fall back to the send input
-      const active = document.activeElement;
-      const target = (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA'))
-        ? active : document.getElementById('peek-cmd-input');
+      // Paste into the send input when focus is on a non-editable area
+      const target = document.getElementById('peek-cmd-input');
       if (target) navigator.clipboard.readText().then(text => {
         const s = target.selectionStart, en = target.selectionEnd;
         target.value = target.value.slice(0, s) + text + target.value.slice(en);
         target.selectionStart = target.selectionEnd = s + text.length;
         target.dispatchEvent(new Event('input'));
+        target.focus();
       });
     }
   }
@@ -6285,7 +6294,8 @@ function showIcalInfo() {
 
 function renderCalendar() {
   const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-  const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const isMobCal = window.innerWidth <= 480;
+  const dayNames = isMobCal ? ['S','M','T','W','T','F','S'] : ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   const titleEl = document.getElementById('cal-title');
   const gridEl = document.getElementById('cal-grid');
   if (!titleEl || !gridEl) return;
@@ -6329,11 +6339,22 @@ function renderCalendar() {
     const safeDate = dateStr;
     html += '<div class="cal-cell' + (isOther ? ' other-month' : '') + (isToday ? ' today' : '') + '" onclick="openBoardAdd(\'' + safeDate + '\')">';
     html += '<div class="cal-cell-num">' + day + '</div>';
-    items.slice(0, 3).forEach(item => {
-      const sty = statusStyle(item.status || 'todo');
-      html += '<div class="cal-chip" style="background:' + sty.bg + ';color:' + sty.color + '" onclick="event.stopPropagation();openBoardDetail(\'' + item.id + '\')" title="' + esc(item.title) + '">' + esc(item.title) + '</div>';
-    });
-    if (items.length > 3) html += '<div class="cal-more">+' + (items.length - 3) + ' more</div>';
+    if (isMobCal) {
+      if (items.length) {
+        html += '<div class="cal-dots">';
+        items.slice(0, 7).forEach(item => {
+          const sty = statusStyle(item.status || 'todo');
+          html += '<div class="cal-dot" style="background:' + sty.color + '" title="' + esc(item.title) + '"></div>';
+        });
+        html += '</div>';
+      }
+    } else {
+      items.slice(0, 3).forEach(item => {
+        const sty = statusStyle(item.status || 'todo');
+        html += '<div class="cal-chip" style="background:' + sty.bg + ';color:' + sty.color + '" onclick="event.stopPropagation();openBoardDetail(\'' + item.id + '\')" title="' + esc(item.title) + '">' + esc(item.title) + '</div>';
+      });
+      if (items.length > 3) html += '<div class="cal-more">+' + (items.length - 3) + ' more</div>';
+    }
     html += '</div>';
   }
   gridEl.innerHTML = html;
