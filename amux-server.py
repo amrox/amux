@@ -6156,8 +6156,9 @@ async function boardDetailSave() {
 
 async function boardDetailDelete() {
   if (!boardDetailId) return;
+  const id = boardDetailId;
   closeBoardDetail();
-  await deleteBoardItem(boardDetailId);
+  await deleteBoardItem(id);
 }
 
 function saveBoardCache() {
