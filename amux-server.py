@@ -2498,7 +2498,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <span id="cal-title" class="cal-title"></span>
     <button class="btn" onclick="calNext()">&#x203A;</button>
     <button class="btn" id="cal-today-btn" onclick="calToday()" style="margin-left:4px;">Today</button>
-    <a class="btn" href="/api/calendar.ics" target="_blank" title="Subscribe (iCal)" style="margin-left:auto;font-size:0.8rem;">&#x1F4C5; iCal</a>
+    <button class="btn" onclick="showIcalInfo()" title="Subscribe in Google / Apple Calendar" style="margin-left:auto;font-size:0.8rem;">&#x1F4C5; iCal</button>
   </div>
   <div id="cal-grid" class="cal-grid"></div>
 </div>
@@ -6084,6 +6084,53 @@ let calMonth = new Date().getMonth(); // 0-indexed
 function calPrev() { calMonth--; if (calMonth < 0) { calMonth = 11; calYear--; } renderCalendar(); }
 function calNext() { calMonth++; if (calMonth > 11) { calMonth = 0; calYear++; } renderCalendar(); }
 function calToday() { calYear = new Date().getFullYear(); calMonth = new Date().getMonth(); renderCalendar(); }
+
+function showIcalInfo() {
+  const origin = window.location.origin;
+  const icalUrl = origin + '/api/calendar.ics';
+  const isLocal = origin.includes('localhost') || origin.includes('127.0.0.1');
+  const googleUrl = 'https://calendar.google.com/calendar/r/settings/addbyurl?' +
+    'url=' + encodeURIComponent(icalUrl);
+  const appleUrl = 'webcal://' + window.location.host + '/api/calendar.ics';
+
+  let html = '<div style="font-size:0.9rem;line-height:1.7;">';
+  html += '<p style="margin-bottom:0.8rem;font-weight:600;">Subscribe to amux calendar</p>';
+
+  if (isLocal) {
+    html += '<p style="margin-bottom:0.8rem;color:var(--muted);font-size:0.82rem;">⚠️ You\'re on localhost — Google and Apple Calendar can\'t reach this URL directly.</p>';
+    html += '<p style="margin-bottom:0.8rem;font-size:0.82rem;">To subscribe from Google or Apple Calendar, expose the feed via <strong>Tailscale Funnel</strong> on your cloud instance:</p>';
+    html += '<code style="display:block;background:var(--card-bg);padding:0.6rem 0.8rem;border-radius:6px;font-size:0.78rem;margin-bottom:0.8rem;word-break:break-all;">ssh root@amux-cloud.tail5ce8f5.ts.net "tailscale funnel --bg 8822"</code>';
+    html += '<p style="font-size:0.82rem;margin-bottom:0.8rem;">Then subscribe to:<br><code style="font-size:0.8rem;">https://amux-cloud.tail5ce8f5.ts.net/api/calendar.ics</code></p>';
+  } else {
+    html += '<p style="margin-bottom:0.6rem;font-size:0.82rem;">Feed URL:</p>';
+    html += '<code style="display:block;background:var(--card-bg);padding:0.5rem 0.8rem;border-radius:6px;font-size:0.78rem;margin-bottom:1rem;word-break:break-all;">' + ical_url_esc(icalUrl) + '</code>';
+    html += '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;">';
+    html += '<a href="' + googleUrl + '" target="_blank" class="btn" style="font-size:0.8rem;">Open in Google Calendar</a>';
+    html += '<a href="' + appleUrl + '" class="btn" style="font-size:0.8rem;">Open in Apple Calendar</a>';
+    html += '</div>';
+  }
+
+  // Always offer direct download
+  html += '<hr style="margin:0.9rem 0;border:none;border-top:1px solid var(--border);">';
+  html += '<a href="/api/calendar.ics" download="amux.ics" class="btn" style="font-size:0.8rem;">&#x2193; Download .ics file</a>';
+  html += '</div>';
+
+  function ical_url_esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+
+  // Reuse the board-edit overlay for a simple modal
+  const overlay = document.getElementById('board-edit-overlay');
+  const inner = overlay.querySelector('.board-edit-inner') || overlay;
+  // Create a temporary modal instead
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;inset:0;z-index:2000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.55);';
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:1.4rem;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.4);';
+  box.innerHTML = html + '<button onclick="this.closest(\'[data-ical-modal]\').remove()" class="btn" style="margin-top:0.8rem;font-size:0.8rem;">Close</button>';
+  modal.setAttribute('data-ical-modal', '1');
+  modal.appendChild(box);
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+  document.body.appendChild(modal);
+}
 
 function renderCalendar() {
   const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];

@@ -93,6 +93,17 @@ ssh -o StrictHostKeyChecking=no \
     "systemctl start amux && sleep 3 && systemctl is-active amux"
 ok "amux service started"
 
+# ── Enable Tailscale Funnel for public iCal access ──
+# Funnel routes through Tailscale's edge (no firewall changes needed).
+# This makes /api/calendar.ics subscribable from Google Calendar, etc.
+log "Enabling Tailscale Funnel on port 8822..."
+ssh -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    "root@$TS_HOST" \
+    "tailscale funnel --bg 8822 2>/dev/null || tailscale serve --bg --https=443 / proxy https://localhost:8822"
+FUNNEL_URL="https://$(echo "$TS_HOST" | sed 's/\.$//').ts.net"
+ok "Tailscale Funnel enabled → $FUNNEL_URL"
+
 # ── Test endpoints ──
 log "Testing API endpoints..."
 sleep 3
@@ -119,13 +130,17 @@ ok "===================================================="
 ok " amux cloud is live!"
 ok "===================================================="
 echo ""
-echo "  Dashboard : $AMUX_URL"
-echo "  SSH       : ssh root@$TS_HOST"
+echo "  Dashboard  : $AMUX_URL"
+echo "  SSH        : ssh root@$TS_HOST"
 echo ""
 echo "  Add to your local amux server switcher:"
 echo "    Name : amux-cloud"
 echo "    URL  : $AMUX_URL"
 echo ""
+echo "  Calendar subscription (Google Calendar / Apple Calendar):"
+echo "    $FUNNEL_URL/api/calendar.ics"
+echo ""
 warn "The VM has a public IP for internet access."
 warn "All inbound except Tailscale UDP 41641 is blocked by firewall."
 warn "Access the dashboard ONLY via Tailscale ($TS_HOST)."
+warn "The iCal feed is public via Tailscale Funnel — it contains board due dates only (no secrets)."
