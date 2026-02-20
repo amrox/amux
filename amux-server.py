@@ -432,6 +432,16 @@ CREATE INDEX IF NOT EXISTS idx_issues_session ON issues(session);
 CREATE INDEX IF NOT EXISTS idx_issues_updated ON issues(updated);
 CREATE INDEX IF NOT EXISTS idx_issues_due     ON issues(due) WHERE due IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_issue_tags_tag ON issue_tags(tag);
+CREATE TABLE IF NOT EXISTS tasks (
+    id          TEXT PRIMARY KEY,
+    session     TEXT NOT NULL,
+    text        TEXT NOT NULL,
+    done        INTEGER NOT NULL DEFAULT 0,
+    pos         INTEGER NOT NULL DEFAULT 0,
+    created     INTEGER NOT NULL,
+    updated     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session);
 """
 
 
@@ -4123,18 +4133,30 @@ function setPeekTab(tab) {
 }
 
 // ── Peek Tasks ────────────────────────────────────────────────────────────────
-function _tasksKey() { return 'amux_tasks_' + (peekSession || '_global'); }
-function _loadTasks() {
-  try { return JSON.parse(localStorage.getItem(_tasksKey()) || '[]'); } catch(e) { return []; }
-}
-function _saveTasks(tasks) { localStorage.setItem(_tasksKey(), JSON.stringify(tasks)); }
+let _peekTasksCache = [];
 
-function renderPeekTasks() {
-  const tasks = _loadTasks();
+function _tasksUrl(tid) {
+  const base = API + '/api/sessions/' + encodeURIComponent(peekSession) + '/tasks';
+  return tid ? base + '/' + tid : base;
+}
+
+async function renderPeekTasks() {
+  const list = document.getElementById('peek-tasks-list');
+  const count = document.getElementById('peek-tasks-count');
+  list.innerHTML = '<div style="color:var(--dim);font-size:0.82rem;padding:8px 4px;">Loading…</div>';
+  try {
+    const r = await fetch(_tasksUrl());
+    _peekTasksCache = await r.json();
+  } catch(e) { _peekTasksCache = []; }
+  _renderTaskList();
+}
+
+function _renderTaskList() {
+  const tasks = _peekTasksCache;
   const list = document.getElementById('peek-tasks-list');
   const count = document.getElementById('peek-tasks-count');
   const done = tasks.filter(t => t.done).length;
-  count.textContent = tasks.length ? (done + ' / ' + tasks.length + ' done') : 'No tasks yet';
+  count.textContent = tasks.length ? (done + ' / ' + tasks.length + ' done') : '';
   if (!tasks.length) {
     list.innerHTML = '<div style="color:var(--dim);font-size:0.85rem;padding:12px 4px;">No tasks yet — add one above.</div>';
     return;
@@ -4142,39 +4164,47 @@ function renderPeekTasks() {
   list.innerHTML = tasks.map(t =>
     '<div class="peek-task-item" data-id="' + t.id + '">' +
     '<input type="checkbox" class="peek-task-cb"' + (t.done ? ' checked' : '') +
-      ' onchange="togglePeekTask(\'' + t.id + '\')">' +
-    '<span class="peek-task-text' + (t.done ? ' done' : '') + '" onclick="togglePeekTask(\'' + t.id + '\')">' +
+      ' onchange="togglePeekTask(\'' + t.id + '\',this.checked)">' +
+    '<span class="peek-task-text' + (t.done ? ' done' : '') + '" onclick="togglePeekTask(\'' + t.id + '\',!' + (!!t.done) + ')">' +
       esc(t.text) + '</span>' +
     '<button class="peek-task-del" onclick="deletePeekTask(\'' + t.id + '\')" title="Delete">&#x2715;</button>' +
     '</div>'
   ).join('');
 }
 
-function addPeekTask() {
+async function addPeekTask() {
   const inp = document.getElementById('peek-task-input');
   const text = inp.value.trim();
   if (!text) return;
-  const tasks = _loadTasks();
-  tasks.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2,5), text, done: false, created: Date.now() });
-  _saveTasks(tasks);
   inp.value = '';
-  renderPeekTasks();
+  try {
+    const r = await fetch(_tasksUrl(), { method: 'POST',
+      headers: {'Content-Type':'application/json'}, body: JSON.stringify({text}) });
+    const t = await r.json();
+    _peekTasksCache.push(t);
+    _renderTaskList();
+  } catch(e) {}
 }
 
-function togglePeekTask(id) {
-  const tasks = _loadTasks();
-  const t = tasks.find(t => t.id === id);
-  if (t) { t.done = !t.done; _saveTasks(tasks); renderPeekTasks(); }
+async function togglePeekTask(id, done) {
+  const t = _peekTasksCache.find(t => t.id === id);
+  if (t) { t.done = done ? 1 : 0; _renderTaskList(); }
+  try {
+    await fetch(_tasksUrl(id), { method: 'PATCH',
+      headers: {'Content-Type':'application/json'}, body: JSON.stringify({done}) });
+  } catch(e) {}
 }
 
-function deletePeekTask(id) {
-  _saveTasks(_loadTasks().filter(t => t.id !== id));
-  renderPeekTasks();
+async function deletePeekTask(id) {
+  _peekTasksCache = _peekTasksCache.filter(t => t.id !== id);
+  _renderTaskList();
+  try { await fetch(_tasksUrl(id), { method: 'DELETE' }); } catch(e) {}
 }
 
-function clearDonePeekTasks() {
-  _saveTasks(_loadTasks().filter(t => !t.done));
-  renderPeekTasks();
+async function clearDonePeekTasks() {
+  _peekTasksCache = _peekTasksCache.filter(t => !t.done);
+  _renderTaskList();
+  try { await fetch(_tasksUrl(), { method: 'DELETE' }); } catch(e) {}
 }
 function peekMemoryTab(tab) {
   document.getElementById('pm-tab-edit').classList.toggle('active', tab === 'edit');
@@ -5305,25 +5335,24 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   if (!document.getElementById('peek-overlay').classList.contains('active')) return;
-  if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+  if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && (e.key === 'c' || e.key === 'v')) {
+    // Always preventDefault to suppress browser beep on non-editable elements
+    e.preventDefault();
     if (e.key === 'c') {
       const sel = window.getSelection();
-      if (sel && sel.toString().length > 0) {
-        navigator.clipboard.writeText(sel.toString());
-        e.preventDefault();
-      }
-    } else if (e.key === 'v') {
+      if (sel && sel.toString().length > 0) navigator.clipboard.writeText(sel.toString());
+      // No selection → silently ignore (no beep)
+    } else {
+      // Ctrl+V: paste into focused input, or fall back to the send input
       const active = document.activeElement;
-      if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {
-        navigator.clipboard.readText().then(text => {
-          const start = active.selectionStart;
-          const end = active.selectionEnd;
-          active.value = active.value.slice(0, start) + text + active.value.slice(end);
-          active.selectionStart = active.selectionEnd = start + text.length;
-          active.dispatchEvent(new Event('input'));
-        });
-        e.preventDefault();
-      }
+      const target = (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA'))
+        ? active : document.getElementById('peek-cmd-input');
+      if (target) navigator.clipboard.readText().then(text => {
+        const s = target.selectionStart, en = target.selectionEnd;
+        target.value = target.value.slice(0, s) + text + target.value.slice(en);
+        target.selectionStart = target.selectionEnd = s + text.length;
+        target.dispatchEvent(new Event('input'));
+      });
     }
   }
 });
@@ -7908,13 +7937,14 @@ class CCHandler(BaseHTTPRequestHandler):
                 _ensure_memory(name, dir_path)
             return self._json({"ok": True, "message": f"created {name}"})
 
-        # Session-specific routes: /api/sessions/<name>/<action>
-        m = re.match(r"^/api/sessions/([^/]+)(/([^/]+))?$", path)
+        # Session-specific routes: /api/sessions/<name>/<action>[/<subid>]
+        m = re.match(r"^/api/sessions/([^/]+)(/([^/]+)(/([^/]+))?)?$", path)
         if not m:
             return self._json({"error": "not found"}, 404)
 
         name = m.group(1)
         action = m.group(3) or ""
+        action_subid = m.group(5) or ""  # e.g. task ID in /tasks/<id>
 
         # Validate session exists (except for list)
         env_file = CC_SESSIONS / f"{name}.env"
@@ -7996,6 +8026,50 @@ class CCHandler(BaseHTTPRequestHandler):
                 if wd:
                     _write_claude_memory(name, wd)
                 return self._json({"ok": True})
+            if action == "tasks":
+                db = get_db()
+                if method == "GET":
+                    rows = db.execute(
+                        "SELECT id, text, done, pos, created, updated FROM tasks WHERE session=? ORDER BY pos, created",
+                        (name,)
+                    ).fetchall()
+                    return self._json([dict(r) for r in rows])
+                body = self._read_body()
+                # POST — create
+                if method == "POST":
+                    text = body.get("text", "").strip()
+                    if not text:
+                        return self._json({"error": "missing text"}, 400)
+                    tid = f"{int(time.time()*1000):x}{os.urandom(3).hex()}"
+                    now = int(time.time())
+                    max_pos = db.execute("SELECT COALESCE(MAX(pos),0) FROM tasks WHERE session=?", (name,)).fetchone()[0]
+                    db.execute(
+                        "INSERT INTO tasks (id, session, text, done, pos, created, updated) VALUES (?,?,?,0,?,?,?)",
+                        (tid, name, text, max_pos + 1, now, now)
+                    )
+                    db.commit()
+                    return self._json({"id": tid, "text": text, "done": 0, "pos": max_pos + 1, "created": now, "updated": now}, 201)
+                # PATCH — update (done/text)
+                if method == "PATCH":
+                    if not action_subid:
+                        return self._json({"error": "missing task id"}, 400)
+                    now = int(time.time())
+                    if "done" in body:
+                        db.execute("UPDATE tasks SET done=?, updated=? WHERE id=? AND session=?",
+                                   (1 if body["done"] else 0, now, action_subid, name))
+                    if "text" in body:
+                        db.execute("UPDATE tasks SET text=?, updated=? WHERE id=? AND session=?",
+                                   (body["text"].strip(), now, action_subid, name))
+                    db.commit()
+                    return self._json({"ok": True})
+                # DELETE — with subid: delete one task; without: delete all done
+                if method == "DELETE":
+                    if action_subid:
+                        db.execute("DELETE FROM tasks WHERE id=? AND session=?", (action_subid, name))
+                    else:
+                        db.execute("DELETE FROM tasks WHERE session=? AND done=1", (name,))
+                    db.commit()
+                    return self._json({"ok": True})
             if action == "start":
                 cfg = parse_env_file(CC_SESSIONS / f"{name}.env") if (CC_SESSIONS / f"{name}.env").exists() else {}
                 work_dir = str(Path(cfg.get("CC_DIR", str(Path.home()))).expanduser().resolve())
