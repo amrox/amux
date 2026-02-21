@@ -3744,8 +3744,7 @@ function render() {
       return ai - bi;
     });
     // Destroy GridStack before replacing innerHTML (cleanup before new DOM)
-    if (_tileGrid) { try { _tileGrid.destroy(true); } catch(e) {} _tileGrid = null; }
-    el.classList.remove('gs-tile-active');
+    destroyTileGrid();
     el.innerHTML = draftCards + sortedFiltered.map(_renderSessionCard).join('');
     for (const [id, val] of Object.entries(savedInputs)) { const inp = document.getElementById(id); if (inp) { inp.value = val; autoGrow(inp); } }
     if (focusedId) { const inp = document.getElementById(focusedId); if (inp) inp.focus({ preventScroll: true }); }
@@ -5798,9 +5797,20 @@ function _syncCardOrderFromTileGrid() {
 }
 
 function destroyTileGrid() {
-  if (_tileGrid) { try { _tileGrid.destroy(true); } catch(e) {} _tileGrid = null; }
+  if (_tileGrid) {
+    try { _tileGrid.destroy(false); } catch(e) {}
+    _tileGrid = null;
+  }
   const cards = document.querySelector('.cards');
-  if (cards) cards.classList.remove('gs-tile-active');
+  if (cards) {
+    cards.classList.remove('gs-tile-active');
+    // Unwrap cards from grid-stack-item wrappers left by destroy(false)
+    cards.querySelectorAll(':scope > .grid-stack-item').forEach(wrapper => {
+      const card = wrapper.querySelector('.card');
+      if (card) cards.insertBefore(card, wrapper);
+      wrapper.remove();
+    });
+  }
 }
 
 function tileMouseDown(e, name) {} // no-op — kept so card HTML doesn't break
