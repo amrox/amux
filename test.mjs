@@ -538,7 +538,10 @@ async function runMobile(browser) {
   log('Tab bar visible on mobile', !!(await tabBar?.isVisible()));
 
   const tabs = await page.$$('.tab-bar button');
-  log('All 3 tab buttons present on mobile', tabs.length === 3, `${tabs.length} tabs`);
+  // Grid tab is desktop-only (display:none on mobile) but still in DOM
+  const visibleTabs = await Promise.all(tabs.map(t => t.isVisible()));
+  const visibleTabCount = visibleTabs.filter(Boolean).length;
+  log('All 3 tab buttons present on mobile', visibleTabCount === 3, `${tabs.length} tabs`);
 
   // Tab bar is sticky — check it has a position style or top set
   const tabTop = await tabBar?.evaluate(el => getComputedStyle(el).position);
@@ -594,7 +597,17 @@ async function runMobile(browser) {
   }
 
   // ── Calendar on mobile ─────────────────────────────────────────────────────
+  // Create a dated item so dots show, switch to month view
+  const todayISOm = new Date().toISOString().slice(0, 10);
+  const apiCalM = await playwrightRequest.newContext({ ignoreHTTPSErrors: true, baseURL: BASE });
+  const mCalItemResp = await apiCalM.post('/api/board', {
+    data: { title: 'Mobile cal dot test', status: 'todo', due: todayISOm },
+    headers: { 'Content-Type': 'application/json' }
+  });
+  const mCalItem = await mCalItemResp.json();
+
   await page.click('#tab-calendar');
+  await page.$eval('#cal-tab-month', el => el.click());
   await waitForCount(page, '.cal-day-header', 7);
   await page.screenshot({ path: '/tmp/amux_mobile_calendar.png' });
 
@@ -615,6 +628,11 @@ async function runMobile(browser) {
     mToolbarWidth <= 400, `scrollWidth: ${mToolbarWidth}`);
 
   await page.screenshot({ path: '/tmp/amux_mobile_calendar_final.png' });
+
+  // Clean up mobile calendar test item
+  if (mCalItem?.id) await apiCalM.delete(`/api/board/${mCalItem.id}`);
+  await apiCalM.dispose();
+
   await ctx.close();
 }
 

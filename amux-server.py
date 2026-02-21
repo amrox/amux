@@ -1383,6 +1383,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <link rel="icon" type="image/svg+xml" href="/icon.svg">
 <link rel="icon" type="image/png" sizes="180x180" href="/icon.png">
 <link rel="apple-touch-icon" href="/icon.png">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10/dist/gridstack.min.css">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
@@ -2536,6 +2537,62 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .board-edit-actions .be-save { background: var(--accent); color: #fff; border-color: var(--accent); }
   .board-edit-actions .be-cancel:active { background: var(--border); }
   .board-edit-actions .be-save:active { opacity: 0.8; }
+
+  /* ═══ Grid Mode ═══ */
+  #grid-view {
+    display: none; position: fixed; inset: 0; z-index: 400;
+    background: #0a0d12; flex-direction: column;
+  }
+  #grid-view.active { display: flex; }
+  .grid-toolbar {
+    display: flex; align-items: center; gap: 8px; padding: 6px 12px;
+    border-bottom: 1px solid var(--border); flex-shrink: 0;
+    background: var(--card); min-height: 44px;
+  }
+  .grid-toolbar-title { font-size: 0.78rem; font-weight: 600; color: var(--dim); flex-shrink: 0; margin-right: 4px; }
+  #grid-chips { display: flex; gap: 5px; flex: 1; overflow-x: auto; align-items: center; padding: 2px 0; }
+  #grid-chips::-webkit-scrollbar { display: none; }
+  .gp-chip {
+    padding: 3px 10px; border-radius: 10px; font-size: 0.73rem; cursor: pointer;
+    border: 1px solid var(--border); background: transparent; color: var(--dim);
+    white-space: nowrap; flex-shrink: 0; transition: all 0.15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .gp-chip:hover { background: var(--hover); color: var(--text); }
+  .gp-chip.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  #gridstack-container { flex: 1; overflow-y: auto; padding: 4px; }
+  .gp-header {
+    display: flex; align-items: center; padding: 0 10px; gap: 8px;
+    background: #161b22; border-bottom: 1px solid var(--border);
+    height: 32px; cursor: move; flex-shrink: 0;
+    user-select: none; -webkit-user-select: none;
+  }
+  .gp-title { font-size: 0.78rem; font-weight: 500; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+  .gp-dot { width: 7px; height: 7px; border-radius: 50%; background: #6e7681; flex-shrink: 0; transition: background 0.3s; }
+  .gp-dot.working { background: #3fb950; }
+  .gp-dot.waiting { background: #d29922; }
+  .gp-dot.idle { background: #58a6ff; }
+  .gp-close {
+    background: none; border: none; color: var(--dim); cursor: pointer;
+    font-size: 0.82rem; padding: 2px 5px; border-radius: 3px; line-height: 1;
+    flex-shrink: 0; -webkit-tap-highlight-color: transparent;
+  }
+  .gp-close:hover { background: rgba(248,81,73,0.15); color: #f85149; }
+  .gp-body {
+    flex: 1; overflow: auto; padding: 10px;
+    font-family: "SF Mono","Fira Code","Cascadia Code",monospace;
+    font-size: 0.76rem; line-height: 1.45; white-space: pre-wrap; word-break: break-all;
+    -webkit-overflow-scrolling: touch; color: #c9d1d9;
+  }
+  #gridstack-container .grid-stack-item-content {
+    border: 1px solid var(--border); border-radius: 6px;
+    overflow: hidden; display: flex; flex-direction: column;
+    background: #010409;
+  }
+  #gridstack-container .ui-resizable-handle { opacity: 0.3; }
+  #gridstack-container .ui-resizable-handle:hover { opacity: 0.8; }
+  #tab-grid { display: none; }
+  @media (min-width: 769px) { #tab-grid { display: block; } }
 </style>
 </head>
 <body>
@@ -2600,6 +2657,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <button id="tab-sessions" class="active" onclick="switchView('sessions')">Sessions</button>
   <button id="tab-board" onclick="switchView('board')">Board</button>
   <button id="tab-calendar" onclick="switchView('calendar')">Calendar</button>
+  <button id="tab-grid" onclick="enterGridMode()">Grid</button>
 </div>
 <div id="session-view">
 <div style="padding:0 12px;margin-top:4px;display:flex;align-items:center;gap:8px;">
@@ -5509,6 +5567,10 @@ document.addEventListener('touchend', () => { peekCheckSelection(); });
 
 // Handle Ctrl+C as copy and Ctrl+V as paste in peek (Mac users may use Ctrl instead of Cmd)
 document.addEventListener('keydown', (e) => {
+  if (document.getElementById('grid-view').classList.contains('active')) {
+    if (e.key === 'Escape') { e.preventDefault(); exitGridMode(); return; }
+    return;
+  }
   if (document.getElementById('board-detail-overlay').classList.contains('active')) {
     if (e.key === 'Escape') { e.preventDefault(); closeBoardDetail(); return; }
     if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); boardDetailSave(); return; }
@@ -6677,6 +6739,120 @@ function _renderCalDay(titleEl, bodyEl) {
   bodyEl.innerHTML = html;
 }
 
+// ═══════ GRID MODE ═══════
+let _grid = null;
+let _gridPanes = {}; // session name → { widget, timer }
+
+function _gpSafeId(name) {
+  return 'gp-' + name.replace(/[^a-zA-Z0-9]/g, '_');
+}
+
+function enterGridMode() {
+  const view = document.getElementById('grid-view');
+  view.classList.add('active');
+  // Mark Grid tab as active, deactivate others
+  ['sessions','board','calendar'].forEach(t => document.getElementById('tab-' + t)?.classList.remove('active'));
+  document.getElementById('tab-grid').classList.add('active');
+  _renderGridChips();
+  if (_grid) return; // already initialized
+  _grid = GridStack.init({
+    cellHeight: 60,
+    minRow: 2,
+    column: 12,
+    margin: 6,
+    animate: true,
+    draggable: { handle: '.gp-header' },
+    resizable: { handles: 'e,se,s,sw,w,n,ne,nw' },
+  }, '#gridstack');
+  _grid.on('change', _gridSaveLayout);
+  _gridRestoreLayout();
+}
+
+function exitGridMode() {
+  Object.values(_gridPanes).forEach(p => { if (p.timer) clearInterval(p.timer); });
+  _gridPanes = {};
+  if (_grid) { try { _grid.destroy(false); } catch(e) {} _grid = null; }
+  document.getElementById('grid-view').classList.remove('active');
+  document.getElementById('tab-grid').classList.remove('active');
+  document.getElementById('tab-' + (activeView || 'sessions')).classList.add('active');
+}
+
+function _renderGridChips() {
+  const el = document.getElementById('grid-chips');
+  if (!el) return;
+  el.innerHTML = (sessions || []).map(s => {
+    const on = !!_gridPanes[s.name];
+    return '<button class="gp-chip' + (on ? ' on' : '') + '" onclick="toggleGridPane(\'' + s.name.replace(/\\/g,'\\\\').replace(/'/g,"\\'") + '\')">' + esc(s.name) + '</button>';
+  }).join('');
+}
+
+function toggleGridPane(name) {
+  if (_gridPanes[name]) removeGridPane(name);
+  else addGridPane(name);
+}
+
+function addGridPane(name, x, y, w, h) {
+  if (!_grid || _gridPanes[name]) return;
+  const sid = _gpSafeId(name);
+  const safeName = name.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+  const content =
+    '<div class="gp-header">' +
+      '<span class="gp-dot" id="' + sid + '-dot"></span>' +
+      '<span class="gp-title">' + esc(name) + '</span>' +
+      '<button class="gp-close" onclick="removeGridPane(\'' + safeName + '\')">&#x2715;</button>' +
+    '</div>' +
+    '<div class="gp-body" id="' + sid + '-body">Loading\u2026</div>';
+  const widget = _grid.addWidget({ id: name, x, y, w: w || 6, h: h || 7, content });
+  _gridPanes[name] = { widget, timer: setInterval(() => _updateGridPane(name), 2000) };
+  _updateGridPane(name);
+  _renderGridChips();
+  _gridSaveLayout();
+}
+
+function removeGridPane(name) {
+  const pane = _gridPanes[name];
+  if (!pane || !_grid) return;
+  clearInterval(pane.timer);
+  try { _grid.removeWidget(pane.widget); } catch(e) {}
+  delete _gridPanes[name];
+  _renderGridChips();
+  _gridSaveLayout();
+}
+
+async function _updateGridPane(name) {
+  const sid = _gpSafeId(name);
+  const body = document.getElementById(sid + '-body');
+  const dot  = document.getElementById(sid + '-dot');
+  if (!body) { removeGridPane(name); return; }
+  try {
+    const data = await fetch(API + '/api/sessions/' + encodeURIComponent(name) + '/peek?lines=120').then(r => r.json());
+    const atBottom = body.scrollHeight - body.scrollTop <= body.clientHeight + 50;
+    body.textContent = stripAnsi(data.output || '');
+    if (atBottom) body.scrollTop = body.scrollHeight;
+    if (dot) {
+      const s = (sessions || []).find(s => s.name === name);
+      dot.className = 'gp-dot' + (!s || !s.running ? '' : s.status === 'working' ? ' working' : s.status === 'needs_input' ? ' waiting' : ' idle');
+    }
+  } catch(e) {
+    if (body) { body.textContent = '(error loading output)'; }
+  }
+}
+
+function _gridSaveLayout() {
+  if (!_grid) return;
+  try { localStorage.setItem('amux_grid_layout', JSON.stringify(_grid.save(false))); } catch(e) {}
+}
+
+function _gridRestoreLayout() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('amux_grid_layout') || '[]');
+    saved.forEach(item => {
+      if (item.id && (sessions || []).find(s => s.name === item.id))
+        addGridPane(item.id, item.x, item.y, item.w, item.h);
+    });
+  } catch(e) {}
+}
+
 // ═══════ INIT ═══════
 // Load cached sessions immediately so offline startup renders content
 const _cachedInit = localStorage.getItem('amux_sessions_cache');
@@ -7297,6 +7473,17 @@ function forceUpdate() {
 }
 </script>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/gridstack@10/dist/gridstack-all.js"></script>
+<div id="grid-view">
+  <div class="grid-toolbar">
+    <span class="grid-toolbar-title">Grid</span>
+    <div id="grid-chips"></div>
+    <button class="btn" onclick="exitGridMode()" style="flex-shrink:0;font-size:0.75rem;padding:4px 10px;">&#x2715; Exit</button>
+  </div>
+  <div id="gridstack-container">
+    <div class="grid-stack" id="gridstack"></div>
+  </div>
+</div>
 </body>
 </html>"""
 
