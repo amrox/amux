@@ -2,7 +2,7 @@
 
 Manage multiple Claude Code sessions from your terminal or phone. amux wraps tmux to let you run, monitor, and control headless Claude Code instances from a single dashboard — locally or over the network as a PWA.
 
-<img src="amux.gif" alt="amux walkthrough" width="100%">
+<img src="amux.gif" alt="amux walkthrough" width="920" height="720">
 
 ## Install
 

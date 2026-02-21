@@ -270,23 +270,60 @@
 
     footer .sep { opacity: 0.3; }
 
-    /* ── Demo GIF ────────────────────────────────────────── */
-    .demo-strip {
-      width: 100vw;
-      margin-left: calc(-50vw + 50%);
-      margin-top: 2.5rem;
-      margin-bottom: 2.5rem;
-      overflow: hidden;
-      border-top: 1px solid var(--border);
-      border-bottom: 1px solid var(--border);
-      background: var(--code-bg);
+    /* ── Demo button ─────────────────────────────────────── */
+    .demo-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.45rem 0.95rem;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s;
+      border: 1px solid var(--border);
+      background: var(--btn-bg);
+      color: var(--fg);
+      font-family: inherit;
     }
+    .demo-btn:hover { background: var(--btn-hover); }
+    .demo-btn svg { width: 14px; height: 14px; flex-shrink: 0; }
 
-    .demo-strip img {
-      display: block;
-      width: 100%;
-      height: auto;
+    /* ── Lightbox ────────────────────────────────────────── */
+    #demo-lightbox {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 999;
+      background: rgba(0,0,0,0.85);
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+      cursor: zoom-out;
     }
+    #demo-lightbox.open { display: flex; }
+    #demo-lightbox img {
+      display: block;
+      width: 920px;
+      max-width: 100%;
+      height: auto;
+      border-radius: 8px;
+      box-shadow: 0 24px 80px rgba(0,0,0,0.6);
+      cursor: default;
+    }
+    #demo-lightbox-close {
+      position: fixed;
+      top: 1rem;
+      right: 1.25rem;
+      background: none;
+      border: none;
+      color: #fff;
+      font-size: 1.6rem;
+      line-height: 1;
+      cursor: pointer;
+      opacity: 0.7;
+    }
+    #demo-lightbox-close:hover { opacity: 1; }
   </style>
 </head>
 <body>
@@ -321,13 +358,24 @@
       <a class="btn" href="https://github.com/mixpeek/amux/blob/main/README.md" target="_blank" rel="noopener">
         Docs
       </a>
+      <button class="demo-btn" onclick="document.getElementById('demo-lightbox').classList.add('open')">
+        <!-- play icon -->
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M6 3.5l7 4.5-7 4.5V3.5z"/><rect x="1" y="1" width="2" height="14" rx="1"/></svg>
+        Watch demo
+      </button>
     </div>
   </div>
 
-  <!-- ── Demo GIF ──────────────────────────────────────── -->
-  <div class="demo-strip">
-    <img src="amux.gif" alt="amux walkthrough — session cards, peek mode, board, workspace">
+  <!-- ── Lightbox ───────────────────────────────────────── -->
+  <div id="demo-lightbox" onclick="this.classList.remove('open')">
+    <button id="demo-lightbox-close" onclick="document.getElementById('demo-lightbox').classList.remove('open')" aria-label="Close">&times;</button>
+    <img src="amux.gif" width="920" height="720" alt="amux walkthrough — session cards, peek mode, board, workspace" onclick="event.stopPropagation()">
   </div>
+  <script>
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') document.getElementById('demo-lightbox').classList.remove('open');
+    });
+  </script>
 
   <!-- ── OSS badge ──────────────────────────────────────── -->
   <div class="oss-line">
