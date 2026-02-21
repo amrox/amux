@@ -5572,17 +5572,20 @@ function peekCheckSelection() {
 }
 document.getElementById('peek-body').addEventListener('mousedown', () => { peekSelecting = true; clearTimeout(peekSelectTimer); });
 document.getElementById('peek-body').addEventListener('touchstart', () => { peekSelecting = true; clearTimeout(peekSelectTimer); }, {passive: true});
-// Force URLs in peek output to open in the system browser (important for PWA desktop/mobile).
-// window.open with noopener,noreferrer is more reliable than target=_blank in PWA mode.
-document.getElementById('peek-body').addEventListener('click', (e) => {
+// Force URLs in peek output to open in the system browser (PWA desktop + mobile).
+// Handle both click (desktop) and touchend (iOS/Android) for reliability.
+function _peekOpenLink(e) {
   const a = e.target.closest('a[href]');
   if (!a) return;
   const href = a.href;
   if (href && /^https?:\/\//.test(href)) {
     e.preventDefault();
+    e.stopPropagation();
     window.open(href, '_blank', 'noopener,noreferrer');
   }
-});
+}
+document.getElementById('peek-body').addEventListener('click', _peekOpenLink);
+document.getElementById('peek-body').addEventListener('touchend', _peekOpenLink, {passive: false});
 document.addEventListener('mouseup', () => { peekCheckSelection(); });
 document.addEventListener('touchend', () => { peekCheckSelection(); });
 
