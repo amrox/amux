@@ -5894,12 +5894,8 @@ function _pwaCb(e) {
   }
 
   // Cmd+V — paste into best available input.
-  // In regular browser tabs native paste works fine (the 'paste' event fires).
-  // Only intercept in standalone/PWA mode where native paste events never fire.
+  // Use Clipboard API directly — native paste events are unreliable in Chrome desktop PWAs.
   if (k === 'v') {
-    const isPWA = window.matchMedia?.('(display-mode: standalone)').matches
-               || navigator.standalone === true;
-    if (!isPWA) return false; // let browser + paste-event handler manage it
     if (!navigator.clipboard?.readText) return false;
 
     const peekOpen  = document.getElementById('peek-overlay')?.classList.contains('active');
