@@ -5852,10 +5852,76 @@ document.addEventListener('paste', function(e) {
   inp.dispatchEvent(new Event('input', { bubbles: true }));
 });
 
-// Keydown: only handle V redirect (focus target so browser fires paste into it)
-// and app-level shortcuts (Escape, Cmd+S, etc.). Do NOT preventDefault for C/V —
-// that would block the copy/paste events above from firing.
+// ── PWA clipboard polyfill ────────────────────────────────────────
+// macOS desktop PWAs don't fire native copy/paste/select-all events even when
+// focus is on an editable element. This helper intercepts those shortcuts and
+// implements them via the Clipboard API. Called first in all keydown handlers
+// so it works in every app context (sessions, peek, board detail, workspace).
+// Returns true if the event was fully handled.
+function _pwaCb(e) {
+  if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return false;
+  const k = e.key.toLowerCase();
+  if (k !== 'a' && k !== 'c' && k !== 'x' && k !== 'v') return false;
+  const ae = document.activeElement;
+  const inp = (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) ? ae : null;
+
+  // Cmd+A — select all in focused input
+  if (k === 'a' && inp) { e.preventDefault(); inp.select(); return true; }
+
+  // Cmd+C / Cmd+X — copy or cut selected text
+  if ((k === 'c' || k === 'x') && inp && navigator.clipboard?.writeText) {
+    const sel = inp.value.slice(inp.selectionStart, inp.selectionEnd);
+    if (sel) {
+      e.preventDefault();
+      navigator.clipboard.writeText(sel).catch(() => {});
+      if (k === 'x') {
+        const s = inp.selectionStart, en = inp.selectionEnd;
+        inp.value = inp.value.slice(0, s) + inp.value.slice(en);
+        inp.selectionStart = inp.selectionEnd = s;
+        inp.dispatchEvent(new Event('input', { bubbles: true }));
+        if (typeof autoGrow === 'function') autoGrow(inp);
+      }
+      return true;
+    }
+  }
+
+  // Cmd+V — paste into best available input
+  if (k === 'v' && navigator.clipboard?.readText) {
+    e.preventDefault();
+    const peekOpen  = document.getElementById('peek-overlay')?.classList.contains('active');
+    const boardOpen = document.getElementById('board-detail-overlay')?.classList.contains('active');
+    const gridOpen  = document.getElementById('grid-view')?.classList.contains('active');
+    const target = inp
+      || (peekOpen  && document.getElementById('peek-cmd-input'))
+      || (boardOpen && document.querySelector('#board-detail-overlay textarea, #board-detail-overlay input'))
+      || (gridOpen  && document.activeElement?.closest('#grid-view') && document.activeElement)
+      || document.querySelector('.card.open .send-input')
+      || document.getElementById('search');
+    if (target) {
+      navigator.clipboard.readText().then(text => {
+        if (!text) return;
+        target.focus({ preventScroll: true });
+        const s = target.selectionStart ?? target.value.length;
+        const en = target.selectionEnd ?? target.value.length;
+        target.value = target.value.slice(0, s) + text + target.value.slice(en);
+        target.selectionStart = target.selectionEnd = s + text.length;
+        target.dispatchEvent(new Event('input', { bubbles: true }));
+        if (typeof autoGrow === 'function') autoGrow(target);
+      }).catch(() => {
+        target.focus({ preventScroll: true });
+        try { document.execCommand('paste'); } catch(_) {}
+      });
+    }
+    return true;
+  }
+
+  return false;
+}
+
 document.addEventListener('keydown', (e) => {
+  // Clipboard shortcuts work everywhere — run before any context-specific early returns
+  if (_pwaCb(e)) return;
+
   if (document.getElementById('grid-view').classList.contains('active')) {
     if (e.key === 'Escape') { e.preventDefault(); exitGridMode(); return; }
     return;
@@ -5864,71 +5930,6 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { e.preventDefault(); closeBoardDetail(); return; }
     if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); boardDetailSave(); return; }
     return;
-  }
-  // macOS desktop PWAs don't fire native copy/paste/select-all events — handle manually.
-  if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
-    const ae = document.activeElement;
-    const inp = (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) ? ae : null;
-
-    // Cmd+A — select all text in the focused input
-    if (e.key === 'a' && inp) {
-      e.preventDefault();
-      inp.select();
-      return;
-    }
-
-    // Cmd+C / Cmd+X — copy (or cut) selected text from focused input
-    if ((e.key === 'c' || e.key === 'x') && inp && navigator.clipboard && navigator.clipboard.writeText) {
-      const selected = inp.value.slice(inp.selectionStart, inp.selectionEnd);
-      if (selected) {
-        e.preventDefault();
-        navigator.clipboard.writeText(selected).catch(() => {});
-        if (e.key === 'x') {
-          const s = inp.selectionStart, en = inp.selectionEnd;
-          inp.value = inp.value.slice(0, s) + inp.value.slice(en);
-          inp.selectionStart = inp.selectionEnd = s;
-          inp.dispatchEvent(new Event('input', { bubbles: true }));
-          if (typeof autoGrow === 'function') autoGrow(inp);
-        }
-        return;
-      }
-    }
-  }
-
-  // Cmd/Ctrl+V — always intercept and use clipboard.readText().
-  // In macOS desktop PWAs the native 'paste' event never fires even when focus
-  // IS on an editable element (confirmed via devtools: TEXTAREA#input-* editable=true,
-  // defaultPrevented stays false, but no paste event fires). We must handle
-  // paste ourselves in all cases.
-  if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === 'v') {
-    if (navigator.clipboard && navigator.clipboard.readText) {
-      e.preventDefault();
-      const ae = document.activeElement;
-      const peekOpen = document.getElementById('peek-overlay')?.classList.contains('active');
-      const boardOpen = document.getElementById('board-detail-overlay')?.classList.contains('active');
-      // Use focused editable as target; fall back to best contextual input
-      let inp = (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) ? ae
-        : peekOpen ? document.getElementById('peek-cmd-input')
-        : boardOpen ? document.querySelector('#board-detail-overlay textarea, #board-detail-overlay input')
-        : document.querySelector('.card.open .send-input') || document.getElementById('search');
-      if (inp) {
-        navigator.clipboard.readText().then(text => {
-          if (!text) return;
-          inp.focus({ preventScroll: true });
-          const s = inp.selectionStart ?? inp.value.length;
-          const en = inp.selectionEnd ?? inp.value.length;
-          inp.value = inp.value.slice(0, s) + text + inp.value.slice(en);
-          inp.selectionStart = inp.selectionEnd = s + text.length;
-          inp.dispatchEvent(new Event('input', { bubbles: true }));
-          if (typeof autoGrow === 'function') autoGrow(inp);
-        }).catch(() => {
-          // Clipboard read denied — try execCommand fallback
-          inp.focus({ preventScroll: true });
-          try { document.execCommand('paste'); } catch(_) {}
-        });
-      }
-    }
-    // If clipboard API not available, don't preventDefault — browser handles natively
   }
   if (!document.getElementById('peek-overlay').classList.contains('active')) return;
   if (e.key === 'Escape') { e.preventDefault(); closePeek(); return; }
