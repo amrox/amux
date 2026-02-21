@@ -336,21 +336,35 @@
         <rect x="2" y="2" width="6" height="6" rx="1"/><rect x="12" y="2" width="6" height="6" rx="1"/>
         <rect x="2" y="12" width="6" height="6" rx="1"/><rect x="12" y="12" width="6" height="6" rx="1"/>
       </svg>
-      <div><strong>Parallel agents</strong> <span>— register any number of Claude Code sessions, each in its own tmux pane, all visible from one place. Start, stop, and send commands to any agent without switching terminals.</span></div>
+      <div><strong>Parallel agents</strong> <span>— run any number of Claude Code sessions simultaneously, each isolated in its own tmux pane with its own conversation history. Start, stop, and send commands to any agent without switching terminals.</span></div>
+    </li>
+
+    <li>
+      <svg class="feat-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"/>
+      </svg>
+      <div><strong>Live status detection</strong> <span>— every session card shows whether an agent is <em>working</em>, <em>needs input</em>, or <em>idle</em>, updated in real time via Server-Sent Events. Know at a glance which agents need your attention without reading their output.</span></div>
     </li>
 
     <li>
       <svg class="feat-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
         <path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zm0 6a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1v-2zm0 6a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1v-2z"/>
       </svg>
-      <div><strong>Web dashboard + PWA</strong> <span>— full-featured HTTPS dashboard installable as a home screen app on iOS and Android. Monitor agents, send commands, and browse output from your phone.</span></div>
+      <div><strong>Web dashboard + PWA</strong> <span>— full-featured HTTPS dashboard installable as a home screen app on iOS and Android. Monitor agents, send commands, and browse output from your phone. Offline-capable with queued command replay on reconnect.</span></div>
+    </li>
+
+    <li>
+      <svg class="feat-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+        <path fill-rule="evenodd" d="M3 3a1 1 0 000 2v8a2 2 0 002 2h2.586l-1.293 1.293a1 1 0 101.414 1.414L10 15.414l2.293 2.293a1 1 0 001.414-1.414L12.414 15H15a2 2 0 002-2V5a1 1 0 100-2H3zm11 4a1 1 0 10-2 0v4a1 1 0 102 0V7zm-3 1a1 1 0 10-2 0v3a1 1 0 102 0V8zM8 9a1 1 0 00-2 0v2a1 1 0 102 0V9z" clip-rule="evenodd"/>
+      </svg>
+      <div><strong>Multi-pane grid view</strong> <span>— switch to a full-screen tiled layout to watch multiple agents' live output side by side. Each pane has its own send bar. Drag to rearrange, and positions are saved across sessions.</span></div>
     </li>
 
     <li>
       <svg class="feat-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
         <path fill-rule="evenodd" d="M4 2a2 2 0 00-2 2v11a3 3 0 106 0V4a2 2 0 00-2-2H4zm1 14a1 1 0 100-2 1 1 0 000 2zm5-1.757l4.9-4.9a2 2 0 000-2.828L13.485 5.1a2 2 0 00-2.828 0L10 5.757v8.486zM16 18H9.071l6-6H16a2 2 0 012 2v2a2 2 0 01-2 2z" clip-rule="evenodd"/>
       </svg>
-      <div><strong>Live peek &amp; control</strong> <span>— scroll through any agent's full output, search it, send slash commands, and use quick-action chips (Ctrl-C, /compact, /clear) without leaving the dashboard.</span></div>
+      <div><strong>Live peek &amp; control</strong> <span>— scroll through any agent's full scrollback (including stopped sessions, which are snapshotted to disk), search output, send commands, and use quick-action chips (Ctrl-C, /compact, /clear) — all without attaching to the terminal.</span></div>
     </li>
 
     <li>
@@ -362,16 +376,30 @@
 
     <li>
       <svg class="feat-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+        <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3zM6 8a2 2 0 11-4 0 2 2 0 014 0zM16 18v-3a5.972 5.972 0 00-.75-2.906A3.005 3.005 0 0119 15v3h-3zM4.75 12.094A5.973 5.973 0 004 15v3H1v-3a3 3 0 013.75-2.906z"/>
+      </svg>
+      <div><strong>Session management</strong> <span>— rename, duplicate, clone &amp; continue (fork a conversation into a new session), switch models mid-session, toggle YOLO mode, pin sessions to the top, and adopt existing tmux sessions not created by amux.</span></div>
+    </li>
+
+    <li>
+      <svg class="feat-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
         <path d="M2 4a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H3a1 1 0 01-1-1V4zm0 6a1 1 0 011-1h5a1 1 0 011 1v6a1 1 0 01-1 1H3a1 1 0 01-1-1v-6zm9-1a1 1 0 00-1 1v6a1 1 0 001 1h5a1 1 0 001-1v-6a1 1 0 00-1-1h-5z"/>
       </svg>
-      <div><strong>Built-in kanban board</strong> <span>— track work across all agents in one place. Auto-generated issue keys (PROJ-1), tags, due dates, drag-and-drop columns, calendar view, and an iCal feed. Backed by REST API.</span></div>
+      <div><strong>Built-in kanban board</strong> <span>— track work across all agents in one place. Auto-generated issue keys (PROJ-1), tags, due dates, drag-and-drop columns, calendar view, and an iCal feed for Google Calendar. Backed by REST API.</span></div>
+    </li>
+
+    <li>
+      <svg class="feat-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+        <path fill-rule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clip-rule="evenodd"/>
+      </svg>
+      <div><strong>Tailscale &amp; remote access</strong> <span>— the server auto-provisions TLS certificates (via Tailscale, mkcert, or self-signed fallback). Access your agents securely from your phone over Tailscale — no VPN config, no open ports.</span></div>
     </li>
 
     <li>
       <svg class="feat-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
         <path fill-rule="evenodd" d="M12.316 3.051a1 1 0 01.633 1.265l-4 12a1 1 0 11-1.898-.632l4-12a1 1 0 011.265-.633zM5.707 6.293a1 1 0 010 1.414L3.414 10l2.293 2.293a1 1 0 11-1.414 1.414l-3-3a1 1 0 010-1.414l3-3a1 1 0 011.414 0zm8.586 0a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 11-1.414-1.414L16.586 10l-2.293-2.293a1 1 0 010-1.414z" clip-rule="evenodd"/>
       </svg>
-      <div><strong>REST API</strong> <span>— every action is an endpoint. Automate agent orchestration with <code style="font-family:'Geist Mono',monospace;font-size:0.8em;">curl</code> or any HTTP client. Register, start, stop, send, query status, and manage board items programmatically.</span></div>
+      <div><strong>REST API</strong> <span>— every action is an endpoint. Automate orchestration with <code style="font-family:'Geist Mono',monospace;font-size:0.8em;">curl</code> or any HTTP client. Register, start, stop, send, query status, and manage board items programmatically.</span></div>
     </li>
 
     <li>
@@ -379,13 +407,6 @@
         <path d="M5 3a2 2 0 00-2 2v2a2 2 0 002 2h2a2 2 0 002-2V5a2 2 0 00-2-2H5zm0 8a2 2 0 00-2 2v2a2 2 0 002 2h2a2 2 0 002-2v-2a2 2 0 00-2-2H5zm6-6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V5zm0 8a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/>
       </svg>
       <div><strong>Session &amp; global memory</strong> <span>— each agent gets its own persistent memory file, plus a shared global memory. Edit directly in the dashboard and inject context into any session.</span></div>
-    </li>
-
-    <li>
-      <svg class="feat-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-        <path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clip-rule="evenodd"/>
-      </svg>
-      <div><strong>Offline-first</strong> <span>— IndexedDB + Service Worker keep sessions browsable without connectivity. Commands sent offline are queued and replayed automatically on reconnect via Background Sync.</span></div>
     </li>
 
     <li>
