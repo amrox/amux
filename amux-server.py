@@ -2709,6 +2709,12 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     padding: 0 0 0 2px; font-size: 0.7rem; line-height: 1;
   }
   .ws-profile-del:hover { opacity: 1; }
+  .ws-save-input {
+    background: var(--input-bg, #0d1117); border: 1px solid var(--accent);
+    border-radius: 6px; color: var(--text); font-size: 0.75rem;
+    padding: 4px 8px; outline: none; width: 130px;
+  }
+  .ws-save-input::placeholder { color: var(--dim); }
   #gridstack-container { flex: 1; overflow-y: auto; padding: 4px; }
   .gp-header {
     display: flex; align-items: center; padding: 0 10px; gap: 8px;
@@ -5850,6 +5856,36 @@ document.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); boardDetailSave(); return; }
     return;
   }
+  // macOS desktop PWAs don't fire native copy/paste/select-all events — handle manually.
+  if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
+    const ae = document.activeElement;
+    const inp = (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) ? ae : null;
+
+    // Cmd+A — select all text in the focused input
+    if (e.key === 'a' && inp) {
+      e.preventDefault();
+      inp.select();
+      return;
+    }
+
+    // Cmd+C / Cmd+X — copy (or cut) selected text from focused input
+    if ((e.key === 'c' || e.key === 'x') && inp && navigator.clipboard && navigator.clipboard.writeText) {
+      const selected = inp.value.slice(inp.selectionStart, inp.selectionEnd);
+      if (selected) {
+        e.preventDefault();
+        navigator.clipboard.writeText(selected).catch(() => {});
+        if (e.key === 'x') {
+          const s = inp.selectionStart, en = inp.selectionEnd;
+          inp.value = inp.value.slice(0, s) + inp.value.slice(en);
+          inp.selectionStart = inp.selectionEnd = s;
+          inp.dispatchEvent(new Event('input', { bubbles: true }));
+          if (typeof autoGrow === 'function') autoGrow(inp);
+        }
+        return;
+      }
+    }
+  }
+
   // Cmd/Ctrl+V — always intercept and use clipboard.readText().
   // In macOS desktop PWAs the native 'paste' event never fires even when focus
   // IS on an editable element (confirmed via devtools: TEXTAREA#input-* editable=true,
@@ -7255,15 +7291,40 @@ function _wsSaveProfiles(profiles) {
   localStorage.setItem(_wsProfilesKey(), JSON.stringify(profiles));
 }
 
-function wsSaveProfile() {
-  const name = prompt('Profile name:');
-  if (!name || !name.trim()) return;
-  if (!_grid) return;
+function wsShowSaveInput() {
+  const inp = document.getElementById('ws-save-input');
+  const btn = document.getElementById('ws-save-btn');
+  const ok  = document.getElementById('ws-save-ok');
+  inp.style.display = 'block';
+  ok.style.display  = 'block';
+  btn.style.display = 'none';
+  inp.focus();
+}
+
+function wsHideSaveInput() {
+  const inp = document.getElementById('ws-save-input');
+  const btn = document.getElementById('ws-save-btn');
+  const ok  = document.getElementById('ws-save-ok');
+  inp.style.display = 'none';
+  ok.style.display  = 'none';
+  btn.style.display = 'block';
+  inp.value = '';
+}
+
+function wsSaveProfileConfirm() {
+  const inp = document.getElementById('ws-save-input');
+  const name = inp ? inp.value.trim() : '';
+  if (!name || !_grid) { wsHideSaveInput(); return; }
   const layout = _grid.save(false);
   const profiles = _wsLoadProfiles();
-  profiles[name.trim()] = layout;
+  profiles[name] = layout;
   _wsSaveProfiles(profiles);
+  wsHideSaveInput();
   _wsRenderProfileBar();
+}
+
+function wsClearWorkspace() {
+  Object.keys(_gridPanes).slice().forEach(n => removeGridPane(n));
 }
 
 function wsLoadProfile(name) {
@@ -8167,7 +8228,13 @@ function forceUpdate() {
     <span class="grid-toolbar-title">Workspace</span>
     <div id="grid-chips"></div>
     <div id="ws-profile-bar" style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-left:4px;"></div>
-    <button class="btn" onclick="wsSaveProfile()" style="flex-shrink:0;font-size:0.75rem;padding:4px 10px;" title="Save current layout as a profile">&#x2B; Save</button>
+    <div id="ws-save-row" style="display:flex;align-items:center;gap:4px;flex-shrink:0;">
+      <input id="ws-save-input" class="ws-save-input" placeholder="Profile name…" style="display:none;"
+        onkeydown="if(event.key==='Enter'){wsSaveProfileConfirm();event.preventDefault();}if(event.key==='Escape'){wsHideSaveInput();}">
+      <button id="ws-save-btn" class="btn" onclick="wsShowSaveInput()" style="font-size:0.75rem;padding:4px 10px;" title="Save current layout as a profile">&#x2B; Save</button>
+      <button id="ws-save-ok" class="btn" onclick="wsSaveProfileConfirm()" style="display:none;font-size:0.75rem;padding:4px 10px;background:var(--green);color:#fff;border-color:var(--green);">&#x2713;</button>
+    </div>
+    <button class="btn" onclick="wsClearWorkspace()" style="flex-shrink:0;font-size:0.75rem;padding:4px 10px;color:var(--dim);" title="Remove all panes">Clear</button>
     <button class="btn" onclick="exitGridMode()" style="flex-shrink:0;font-size:0.75rem;padding:4px 10px;">&#x2715; Exit</button>
   </div>
   <div id="gridstack-container">
