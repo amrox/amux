@@ -2097,7 +2097,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     display: none; position: absolute; top: calc(100% + 6px); right: 0;
     background: var(--card); border: 1px solid var(--border);
     border-radius: 10px; min-width: 260px; z-index: 60;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.4); overflow: hidden;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4); overflow-x: hidden; overflow-y: auto;
+    max-height: calc(100dvh - 80px);
     padding: 10px 0;
   }
   .settings-menu.open { display: block; }
@@ -2115,7 +2116,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .settings-server-item {
     display: flex; align-items: center; justify-content: space-between;
     padding: 6px 8px; border-radius: 6px; cursor: pointer; margin-bottom: 2px;
-    transition: background 0.12s;
+    transition: background 0.12s; -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
   }
   .settings-server-item:active { background: rgba(88,166,255,0.1); }
   .settings-server-current { background: rgba(88,166,255,0.08); cursor: default; }
