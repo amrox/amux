@@ -1923,7 +1923,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     white-space: nowrap;
   }
   .peek-copy-btn:active { background: var(--accent); color: #fff; }
-  .overlay-body a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+  .overlay-body a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
   .overlay-body a:active { color: #79c0ff; }
   .overlay-body .file-link { color: var(--cyan); text-decoration: none; border-bottom: 1px dashed var(--cyan); cursor: pointer; }
   .overlay-body .file-link:active { color: #79ead3; }
@@ -5173,7 +5173,7 @@ function linkifyOutput(text) {
       html += esc(text.slice(last, match.start));
     }
     if (match.type === 'url') {
-      html += `<a href="${esc(match.value)}" target="_blank" rel="noopener">${esc(match.value)}</a>`;
+      html += `<a href="${esc(match.value)}" target="_blank" rel="noopener" onclick="if(window.getSelection().toString())return;event.preventDefault();event.stopPropagation();window.open(this.href,'_blank','noopener,noreferrer')">${esc(match.value)}</a>`;
     } else if (match.type === 'file') {
       const rawPath = match.value.replace(/:[\d]+$/, '');  // strip :linenum
       const isMd = /\.md$/i.test(rawPath);
