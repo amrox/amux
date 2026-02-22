@@ -87,6 +87,39 @@ amux serve 9000      # custom port
 - **File attachments** — send files to agents directly from the dashboard: paste an image with Ctrl-V, drag and drop onto the send bar, or click the 📎 attachment button. Supports images, PDFs, text, CSV, JSON, and log files
 - **Connect tmux sessions** — adopt existing tmux sessions not created by amux
 
+### Agent Orchestration
+
+Sessions can coordinate with each other via the HTTP API. Every session gets two env vars injected at startup:
+
+- `$AMUX_SESSION` — the session's own name
+- `$AMUX_URL` — the API base URL (`https://localhost:8822`)
+
+From inside a session, Claude can discover peers, send messages, and delegate work:
+
+```bash
+# See what other sessions are running
+curl -sk $AMUX_URL/api/sessions | python3 -c \
+  "import json,sys; [print(s['name'], s['status']) for s in json.load(sys.stdin) if s['running']]"
+
+# Send a message to another session
+curl -sk -X POST -H 'Content-Type: application/json' \
+  -d '{"text":"please write tests for auth.py and report back"}' \
+  $AMUX_URL/api/sessions/worker-1/send
+
+# Watch another session's output
+curl -sk "$AMUX_URL/api/sessions/worker-1/peek?lines=50" | \
+  python3 -c "import json,sys; print(json.load(sys.stdin).get('output',''))"
+
+# Post a board task for a worker session to pick up
+curl -sk -X POST -H 'Content-Type: application/json' \
+  -d '{"title":"Refactor auth","session":"worker-1","status":"todo"}' \
+  $AMUX_URL/api/board
+```
+
+The global memory file (shared across all sessions) contains the full inter-session API reference, so Claude can use these patterns without being explicitly told. From the peek send bar, just tell an orchestrator session in plain English:
+
+> "Find the worker-1 session and ask it to implement the login endpoint, then check back in 30 seconds"
+
 ### Board (Kanban)
 
 A built-in kanban board for task tracking across sessions:
