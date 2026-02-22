@@ -3017,12 +3017,13 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .gp-dot.working { background: #3fb950; }
   .gp-dot.waiting { background: #d29922; }
   .gp-dot.idle { background: #58a6ff; }
-  .gp-close {
+  .gp-close, .gp-peek-btn {
     background: none; border: none; color: var(--dim); cursor: pointer;
     font-size: 0.82rem; padding: 2px 5px; border-radius: 3px; line-height: 1;
     flex-shrink: 0; -webkit-tap-highlight-color: transparent;
   }
   .gp-close:hover { background: rgba(248,81,73,0.15); color: #f85149; }
+  .gp-peek-btn:hover { background: rgba(88,166,255,0.12); color: #58a6ff; }
   .gp-body {
     flex: 1; overflow: auto; padding: 10px;
     font-family: "SF Mono","Fira Code","Cascadia Code",monospace;
@@ -7781,6 +7782,7 @@ function addGridPane(name, x, y, w, h) {
     '<div class="gp-header">' +
       '<span class="gp-dot" id="' + sid + '-dot"></span>' +
       '<span class="gp-title">' + esc(name) + '</span>' +
+      '<button class="gp-peek-btn" onclick="openPeek(\'' + safeName + '\');event.stopPropagation();" title="Open in peek">&#x2197;</button>' +
       '<button class="gp-close" onclick="removeGridPane(\'' + safeName + '\')">&#x2715;</button>' +
     '</div>' +
     '<div class="gp-body overlay-body" id="' + sid + '-body" onclick="_lastActivePane=\'' + safeName + '\'">Loading\u2026</div>' +
