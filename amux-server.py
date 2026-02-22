@@ -2876,9 +2876,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <div style="padding:0 12px;margin-top:4px;display:flex;align-items:center;gap:8px;">
   <div class="search-wrap" id="search-wrap" style="flex:1;">
     <input class="search-input" id="search-input" type="text" placeholder="Search sessions..." autocomplete="off" autocorrect="off"
-      oninput="searchQuery=this.value;document.getElementById('search-wrap').classList.toggle('has-value',!!this.value);render()">
+      oninput="searchQuery=this.value;document.getElementById('search-wrap').classList.toggle('has-value',!!this.value);onSearchInput()">
     <button class="search-clear" onclick="event.stopPropagation();clearSearch()">&#x2715;</button>
   </div>
+  <button id="log-search-btn" class="tile-btn" onclick="toggleLogSearch()" title="Search inside session logs" style="font-size:0.75rem;white-space:nowrap;padding:0 8px;">&#x1F50D; Logs</button>
   <div class="tile-controls">
     <button class="tile-btn" id="tile-list-btn" onclick="setLayoutMode('list')" title="List view">&#x2630;</button>
     <button class="tile-btn" id="tile-group-btn" onclick="setLayoutMode('group')" title="Group by status" style="font-size:0.75rem;font-weight:700;">#</button>
@@ -3284,6 +3285,10 @@ let _liveSSE = false;      // true only when SSE is actively receiving messages
 let expanded = new Set();
 let searchQuery = '';
 let activeTag = '';
+let logSearchMode = false;
+let _logMatches = {};       // name -> matched snippet string
+let _logSearchTimer = null;
+let _logSearchAbort = null;
 let peekSession = null;
 let peekTimer = null;
 let peekSessionDir = '';
@@ -3821,7 +3826,8 @@ function render() {
     s.name.toLowerCase().includes(q) ||
     (s.dir || '').toLowerCase().includes(q) ||
     (s.desc || '').toLowerCase().includes(q) ||
-    (s.tags || []).some(t => t.toLowerCase().includes(q))
+    (s.tags || []).some(t => t.toLowerCase().includes(q)) ||
+    (logSearchMode && s.name in _logMatches)
   ) : list;
   if ((q || activeTag) && !filtered.length) {
     el.innerHTML = '<div class="empty">No matching sessions.</div>';
@@ -3884,6 +3890,7 @@ function render() {
       ${isExp && s.desc ? `<div class="card-desc">${esc(s.desc)}</div>` : ''}
       ${!isExp && s.task_name ? `<div class="card-preview">${esc(s.task_name)}</div>` : ''}
       ${isExp && s.preview ? `<div class="card-preview">${esc(s.preview)}</div>` : ''}
+      ${logSearchMode && _logMatches[s.name] ? `<div class="card-preview" style="color:var(--accent);opacity:0.8;" onclick="event.stopPropagation();openPeek('${s.name}')">&#x1F50D; ${esc(_logMatches[s.name])}</div>` : ''}
       ${(isYolo || model || s.tags.length) ? `<div class="badges">
         ${isYolo ? '<span class="badge yolo">YOLO</span>' : ''}
         ${model ? `<span class="badge model">${esc(model)}</span>` : ''}
@@ -5300,7 +5307,61 @@ function clearSearch() {
   const inp = document.getElementById('search-input');
   inp.value = '';
   searchQuery = '';
+  _logMatches = {};
   document.getElementById('search-wrap').classList.remove('has-value');
+  render();
+}
+
+function onSearchInput() {
+  searchQuery = document.getElementById('search-input').value;
+  document.getElementById('search-wrap').classList.toggle('has-value', !!searchQuery);
+  render();
+  if (logSearchMode) {
+    clearTimeout(_logSearchTimer);
+    _logSearchTimer = setTimeout(_runLogSearch, 400);
+  }
+}
+
+function toggleLogSearch() {
+  logSearchMode = !logSearchMode;
+  const btn = document.getElementById('log-search-btn');
+  btn.style.background = logSearchMode ? 'var(--accent)' : '';
+  btn.style.color = logSearchMode ? '#000' : '';
+  document.getElementById('search-input').placeholder = logSearchMode
+    ? 'Search session logs...' : 'Search sessions...';
+  _logMatches = {};
+  if (logSearchMode && searchQuery) {
+    clearTimeout(_logSearchTimer);
+    _logSearchTimer = setTimeout(_runLogSearch, 100);
+  }
+  render();
+}
+
+async function _runLogSearch() {
+  const q = searchQuery.toLowerCase().trim();
+  if (!q || !logSearchMode) { _logMatches = {}; render(); return; }
+  // Cancel any in-flight search
+  if (_logSearchAbort) _logSearchAbort.abort();
+  _logSearchAbort = new AbortController();
+  const sig = _logSearchAbort.signal;
+  const sessions = allSessions || [];
+  const results = await Promise.allSettled(
+    sessions.map(s =>
+      fetch(API + '/api/sessions/' + encodeURIComponent(s.name) + '/peek?lines=500', { signal: sig })
+        .then(r => r.json())
+        .then(data => {
+          const output = data.output || '';
+          const lines = output.split('\n');
+          const hit = lines.find(l => l.toLowerCase().includes(q));
+          if (hit) return { name: s.name, snippet: hit.replace(/\x1b\[[0-9;]*m/g, '').trim().slice(0, 80) };
+          return null;
+        })
+        .catch(() => null)
+    )
+  );
+  if (sig.aborted) return;
+  _logMatches = {};
+  results.forEach(r => { if (r.status === 'fulfilled' && r.value) _logMatches[r.value.name] = r.value.snippet; });
   render();
 }
 function clearPeekSearch() {
