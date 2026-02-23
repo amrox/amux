@@ -2020,6 +2020,18 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   body.light .gp-header { background: var(--card); }
   body.light .gp-send { background: var(--card); }
   body.light .gp-close, body.light .gp-peek-btn { color: var(--dim); }
+  /* File/explore overlay — hardcoded near-black backdrop + body need light overrides */
+  body.light .file-overlay { background: rgba(240,242,245,0.97); }
+  body.light .file-overlay-header h2 { color: var(--text); }
+  /* Directory listing body — light bg with readable text */
+  body.light #explore-overlay .file-overlay-body { background: var(--bg); color: var(--text); }
+  body.light .explore-name { color: var(--text); }
+  body.light .explore-row:hover { background: var(--card); }
+  /* File viewer body — keep dark for ANSI/code readability; use card bg for non-raw views */
+  body.light #file-overlay .file-overlay-body { background: #1c2128; color: #cdd9e5; }
+  body.light #file-overlay .file-overlay-body.file-image,
+  body.light #file-overlay .file-overlay-body.file-pdf,
+  body.light #file-overlay .file-overlay-body.markdown { background: var(--bg); color: var(--text); }
   html { font-size: 16px; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
