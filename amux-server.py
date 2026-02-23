@@ -1877,11 +1877,23 @@ def send_text(name: str, text: str) -> tuple[bool, str]:
         return False, "not running"
     try:
         t = tmux_name(name)
-        # Send text literally (-l) then Enter separately
-        subprocess.run(
-            ["tmux", "send-keys", "-t", t, "-l", text],
-            check=True, capture_output=True, timeout=5,
-        )
+        # tmux send-keys -l has a ~500 char buffer limit; use load-buffer+paste-buffer for longer text
+        if len(text) > 400:
+            import tempfile, os as _os
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt', encoding='utf-8') as f:
+                f.write(text)
+                tmp = f.name
+            try:
+                subprocess.run(["tmux", "load-buffer", tmp], check=True, capture_output=True, timeout=5)
+                subprocess.run(["tmux", "paste-buffer", "-t", t], check=True, capture_output=True, timeout=5)
+            finally:
+                _os.unlink(tmp)
+        else:
+            # Send text literally (-l) then Enter separately
+            subprocess.run(
+                ["tmux", "send-keys", "-t", t, "-l", text],
+                check=True, capture_output=True, timeout=5,
+            )
         # Give readline time to process all queued characters before Enter arrives
         time.sleep(0.1)
         subprocess.run(
@@ -6094,6 +6106,7 @@ function slashAcKeydown(e) {
   const el = document.getElementById('slash-ac-list');
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendPeekCmd(); return; }
   if (!el.classList.contains('open')) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendPeekCmd(); return; }
     if (e.key === 'ArrowUp' && inp.selectionStart === 0) { e.preventDefault(); cmdHistoryUp(inp); return; }
     if (e.key === 'ArrowDown' && _cmdHistoryIdx !== -1) { e.preventDefault(); cmdHistoryDown(inp); return; }
     return;
@@ -6233,6 +6246,7 @@ function cardSlashAcKeydown(name, e) {
   const el = document.getElementById('card-ac-' + name);
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendFromInput(name); return; }
   if (!el || !el.classList.contains('open')) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendFromInput(name); return; }
     if (e.key === 'ArrowUp' && inp && inp.selectionStart === 0) { e.preventDefault(); cmdHistoryUp(inp); return; }
     if (e.key === 'ArrowDown' && _cmdHistoryIdx !== -1) { e.preventDefault(); if (inp) cmdHistoryDown(inp); return; }
     return;
