@@ -2458,6 +2458,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   }
   .ac-item:last-child { border-bottom: none; }
   .ac-item:active, .ac-item.selected { background: rgba(88,166,255,0.15); }
+  .ac-section { padding: 4px 12px; font-size: 0.68rem; font-family: -apple-system, sans-serif;
+    color: var(--dim); font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+    border-bottom: 1px solid var(--border); background: var(--bg); pointer-events: none; }
   .at-item .at-at { color: var(--accent); }
 
   /* Search input with clear button */
@@ -6717,6 +6720,7 @@ async function submitCreate() {
     body: JSON.stringify({ name, dir, creator: _getDeviceName() })
   });
   if (r && r.ok) {
+    if (dir) _addRecentDir(dir);
     // Create branch if requested
     if (branch && dir) {
       await fetch(API + '/api/sessions/' + encodeURIComponent(name) + '/git', {
@@ -6738,22 +6742,71 @@ async function submitCreate() {
   await fetchSessions();
 }
 
-// ── Directory autocomplete ──
+// ── Directory autocomplete + recent dirs ──
 let acTimer = null;
 let acItems = [];
 let acSelected = -1;
+
+function _getRecentDirs() {
+  try { return JSON.parse(localStorage.getItem('amux_recent_dirs') || '[]'); } catch(e) { return []; }
+}
+function _addRecentDir(dir) {
+  if (!dir) return;
+  let recents = _getRecentDirs().filter(d => d !== dir);
+  recents.unshift(dir);
+  recents = recents.slice(0, 12);
+  localStorage.setItem('amux_recent_dirs', JSON.stringify(recents));
+}
+function _buildSuggestedDirs() {
+  // Combine recent dirs + unique dirs from loaded sessions, deduped
+  const recents = _getRecentDirs();
+  const sessionDirs = [...new Set(sessions.map(s => s.dir).filter(Boolean))];
+  const combined = [...recents];
+  for (const d of sessionDirs) {
+    if (!combined.includes(d)) combined.push(d);
+  }
+  return combined.slice(0, 15);
+}
+
+function _acShowSuggested() {
+  const el = document.getElementById('ac-list');
+  const recents = _getRecentDirs();
+  const sessionDirs = [...new Set(sessions.map(s => s.dir).filter(Boolean))].filter(d => !recents.includes(d));
+  if (!recents.length && !sessionDirs.length) { el.classList.remove('open'); return; }
+  acItems = [...recents, ...sessionDirs].slice(0, 15);
+  acSelected = -1;
+  let html = '';
+  if (recents.length) {
+    html += `<div class="ac-section">Recent</div>`;
+    html += recents.slice(0, 8).map((item, i) =>
+      `<div class="ac-item" onmousedown="acPick(${i})">${esc(item)}</div>`
+    ).join('');
+  }
+  if (sessionDirs.length) {
+    const offset = recents.length;
+    html += `<div class="ac-section">Sessions</div>`;
+    html += sessionDirs.slice(0, 7).map((item, i) =>
+      `<div class="ac-item" onmousedown="acPick(${offset + i})">${esc(item)}</div>`
+    ).join('');
+  }
+  el.innerHTML = html;
+  el.classList.add('open');
+}
+
 function acFetch(query) {
   clearTimeout(acTimer);
+  const el = document.getElementById('ac-list');
   if (!query || query.length < 2) {
-    document.getElementById('ac-list').classList.remove('open');
+    // Show recent/session dirs when field is empty or very short
+    _acShowSuggested();
     return;
   }
+  el.classList.remove('open');
   acTimer = setTimeout(async () => {
     try {
       const r = await fetch(API + '/api/autocomplete/dir?q=' + encodeURIComponent(query));
       acItems = await r.json();
       acSelected = -1;
-      const el = document.getElementById('ac-list');
       if (!acItems.length) { el.classList.remove('open'); return; }
       el.innerHTML = acItems.map((item, i) =>
         `<div class="ac-item" onmousedown="acPick(${i})">${esc(item)}</div>`
