@@ -1994,6 +1994,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   body.light .board-empty { color: var(--dim) !important; }
   /* Board tag chips — very transparent bg needs a real border */
   body.light .board-card-tag { border: 1px solid var(--border); }
+  /* Session card terminal preview — semi-transparent dark bg becomes gray in light mode */
+  body.light .card-preview-lines {
+    background: #1c2128; color: #cdd9e5;
+  }
   /* Peek search highlight — white text on yellow bg fine in dark; fix for light terminal */
   body.light .peek-highlight { color: #fff; }
   /* Ac section headers */
