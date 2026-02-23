@@ -1882,6 +1882,8 @@ def send_text(name: str, text: str) -> tuple[bool, str]:
             ["tmux", "send-keys", "-t", t, "-l", text],
             check=True, capture_output=True, timeout=5,
         )
+        # Give readline time to process all queued characters before Enter arrives
+        time.sleep(0.1)
         subprocess.run(
             ["tmux", "send-keys", "-t", t, "Enter"],
             check=True, capture_output=True, timeout=5,
