@@ -10271,20 +10271,23 @@ function forceUpdate() {
 PWA_MANIFEST = json.dumps({
     "name": "amux — Claude Code Multiplexer",
     "short_name": "amux",
+    "id": "/",
     "start_url": "/",
     "display": "standalone",
     "background_color": "#0d1117",
     "theme_color": "#0d1117",
     "icons": [
         {"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"},
-        {"src": "/icon.png", "sizes": "180x180", "type": "image/png"},
+        {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
+        {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png"},
+        {"src": "/icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any"},
     ],
 })
 
 # Robust service worker: cache-first with localStorage fallback for multi-day offline
 SERVICE_WORKER = r"""
 const CACHE = 'amux-v0.6.2';
-const SHELL_URLS = ['/', '/manifest.json', '/icon.svg', '/icon.png'];
+const SHELL_URLS = ['/', '/manifest.json', '/icon.svg', '/icon.png', '/icon-192.png', '/icon-512.png'];
 
 // Install: pre-cache entire app shell
 self.addEventListener('install', e => {
@@ -10621,7 +10624,7 @@ class CCHandler(BaseHTTPRequestHandler):
             return self._raw(PWA_MANIFEST.encode(), "application/manifest+json", cache=True)
         if method == "GET" and path == "/sw.js":
             return self._raw(SERVICE_WORKER.encode(), "application/javascript")
-        if method == "GET" and path in ("/icon.svg", "/icon.png"):
+        if method == "GET" and path in ("/icon.svg", "/icon.png", "/icon-192.png", "/icon-512.png"):
             icon_path = Path(__file__).resolve().parent / path.lstrip("/")
             if icon_path.exists():
                 ct = "image/svg+xml" if path.endswith(".svg") else "image/png"
