@@ -926,6 +926,37 @@ def _report_fetch_qdrant(cfg):
         return {"name": "Qdrant", "error": str(e), "daily": [], "monthly": []}
 
 
+def _report_fetch_mixpeek_ops_all(cfg):
+    """Fetch all vendor spend from the Mixpeek ops server in a single HTTP call.
+
+    Returns {vendor_id: {name, monthly, daily, error}} — the same structure the
+    ops server's /dashboard/spend endpoint already returns.
+
+    Config keys (all optional):
+      ops_url   — override AMUX_MIXPEEK_OPS_URL env var
+      ops_token — override AMUX_MIXPEEK_OPS_TOKEN env var
+      months    — months of history (default 12)
+    """
+    import json as _j, urllib.request as _ur
+    _VENDORS = ("render", "gcp_cloud_run", "mongodb_atlas", "gke", "qdrant_cloud")
+    url    = cfg.get("ops_url")   or os.environ.get("AMUX_MIXPEEK_OPS_URL", "")
+    token  = cfg.get("ops_token") or os.environ.get("AMUX_MIXPEEK_OPS_TOKEN", "")
+    months = int(cfg.get("months", 12))
+    if not url:
+        err = "AMUX_MIXPEEK_OPS_URL not set"
+        return {v: {"name": v, "error": err, "daily": [], "monthly": []} for v in _VENDORS}
+    try:
+        req = _ur.Request(
+            f"{url.rstrip('/')}/dashboard/spend?months={months}",
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        )
+        with _ur.urlopen(req, timeout=30) as resp:
+            return _j.loads(resp.read())
+    except Exception as e:
+        err = str(e)
+        return {v: {"name": v, "error": err, "daily": [], "monthly": []} for v in _VENDORS}
+
+
 # Registry maps type_id → metadata + vendor fetchers.
 # To add a new report type: add an entry here. The UI reads /api/reports/types dynamically.
 _REPORT_TYPE_REGISTRY = {
@@ -948,6 +979,19 @@ _REPORT_TYPE_REGISTRY = {
             "qdrant":   {"label": "Qdrant",    "color": "#DC244C",
                          "env_vars": ["AMUX_QDRANT_CLOUD_API_KEY"],
                          "fetch": _report_fetch_qdrant},
+        },
+    },
+    "mixpeek-vendor-spend": {
+        "label": "Mixpeek Vendor Spend",
+        "description": "Infrastructure vendor spend via Mixpeek ops server (Render, GCP Cloud Run, MongoDB Atlas, GKE Autopilot, Qdrant Cloud). Config: months (default 12), ops_url, ops_token.",
+        "report_fetch": _report_fetch_mixpeek_ops_all,
+        "vendors": {
+            "render":        {"label": "Render",        "color": "#46E3B7",
+                              "env_vars": ["AMUX_MIXPEEK_OPS_URL", "AMUX_MIXPEEK_OPS_TOKEN"]},
+            "gcp_cloud_run": {"label": "GCP Cloud Run", "color": "#4285F4", "env_vars": []},
+            "mongodb_atlas": {"label": "MongoDB Atlas", "color": "#47A248", "env_vars": []},
+            "gke":           {"label": "GKE Autopilot", "color": "#FF6B35", "env_vars": []},
+            "qdrant_cloud":  {"label": "Qdrant Cloud",  "color": "#DC244C", "env_vars": []},
         },
     },
     # Add more report types here, e.g.:
@@ -6188,7 +6232,9 @@ function handlePeekFileInput(e) {
   e.target.value = '';
 }
 
+let _slashAcSuppressNext = false;
 function handlePeekPaste(e) {
+  _slashAcSuppressNext = true;  // suppress slash dropdown for pasted text
   const items = e.clipboardData?.items;
   if (!items) return;
   for (const item of items) {
@@ -6356,6 +6402,7 @@ let slashAcSelected = -1;
 function slashAcUpdate() {
   const inp = document.getElementById('peek-cmd-input');
   const el = document.getElementById('slash-ac-list');
+  if (_slashAcSuppressNext) { _slashAcSuppressNext = false; el.classList.remove('open'); slashAcItems = []; return; }
   const val = inp.value;
   // @ mention takes priority (cursor-aware)
   if (_atRender(inp, el, 'slashAcPick')) { slashAcItems = []; slashAcSelected = -1; return; }
@@ -7309,15 +7356,26 @@ document.addEventListener('copy', function(e) {
 document.addEventListener('paste', function(e) {
   const ae = document.activeElement;
   if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
-  const text = e.clipboardData?.getData('text/plain');
-  if (!text) return;
   const peekOpen = document.getElementById('peek-overlay')?.classList.contains('active');
   const boardOpen = document.getElementById('board-detail-overlay')?.classList.contains('active');
+  // Check for image/file paste — route to uploadAndAttach when peek is open
+  if (peekOpen && e.clipboardData?.items) {
+    for (const item of e.clipboardData.items) {
+      if (item.kind === 'file') {
+        e.preventDefault();
+        uploadAndAttach(item.getAsFile());
+        return;
+      }
+    }
+  }
+  const text = e.clipboardData?.getData('text/plain');
+  if (!text) return;
   const inp = peekOpen ? document.getElementById('peek-cmd-input')
     : boardOpen ? document.querySelector('#board-detail-overlay textarea, #board-detail-overlay input')
     : document.querySelector('.card.open .send-input') || document.getElementById('search');
   if (!inp) return;
   e.preventDefault();
+  if (inp.id === 'peek-cmd-input') _slashAcSuppressNext = true;
   const s = inp.selectionStart ?? inp.value.length;
   const en = inp.selectionEnd ?? inp.value.length;
   inp.value = inp.value.slice(0, s) + text + inp.value.slice(en);
@@ -7332,6 +7390,20 @@ document.addEventListener('paste', function(e) {
 // implements them via the Clipboard API. Called first in all keydown handlers
 // so it works in every app context (sessions, peek, board detail, workspace).
 // Returns true if the event was fully handled.
+function _pasteTextInto(target) {
+  navigator.clipboard.readText().then(text => {
+    if (!text) return;
+    if (target.id === 'create-dir') _acSuppressNext = true;
+    if (target.id === 'peek-cmd-input') _slashAcSuppressNext = true;
+    target.focus({ preventScroll: true });
+    const s = target.selectionStart ?? target.value.length;
+    const en = target.selectionEnd ?? target.value.length;
+    target.value = target.value.slice(0, s) + text + target.value.slice(en);
+    target.selectionStart = target.selectionEnd = s + text.length;
+    target.dispatchEvent(new Event('input', { bubbles: true }));
+    if (typeof autoGrow === 'function') autoGrow(target);
+  }).catch(() => {});
+}
 function _pwaCb(e) {
   if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return false;
   const k = e.key.toLowerCase();
@@ -7388,17 +7460,26 @@ function _pwaCb(e) {
       || document.getElementById('search');
     if (target) {
       e.preventDefault();
-      navigator.clipboard.readText().then(text => {
-        if (!text) return;
-        if (target.id === 'create-dir') _acSuppressNext = true;
-        target.focus({ preventScroll: true });
-        const s = target.selectionStart ?? target.value.length;
-        const en = target.selectionEnd ?? target.value.length;
-        target.value = target.value.slice(0, s) + text + target.value.slice(en);
-        target.selectionStart = target.selectionEnd = s + text.length;
-        target.dispatchEvent(new Event('input', { bubbles: true }));
-        if (typeof autoGrow === 'function') autoGrow(target);
-      }).catch(() => {});
+      // Try clipboard.read() first for image/file paste support
+      if (peekOpen && navigator.clipboard.read) {
+        navigator.clipboard.read().then(items => {
+          for (const item of items) {
+            const imgType = item.types.find(t => t.startsWith('image/'));
+            if (imgType) {
+              item.getType(imgType).then(blob => {
+                const ext = imgType.split('/')[1] || 'png';
+                const file = new File([blob], 'pasted-image.' + ext, { type: imgType });
+                uploadAndAttach(file);
+              });
+              return;
+            }
+          }
+          // No image — fall through to text paste
+          _pasteTextInto(target);
+        }).catch(() => _pasteTextInto(target));
+      } else {
+        _pasteTextInto(target);
+      }
       return true;
     }
   }
@@ -11312,12 +11393,15 @@ class CCHandler(BaseHTTPRequestHandler):
                 all_vendors = type_meta.get("vendors", {})
                 vendor_ids = cfg.get("vendors", list(all_vendors.keys()))
                 results = {}
-                for v in vendor_ids:
-                    vm = all_vendors.get(v)
-                    if vm and "fetch" in vm:
-                        results[v] = vm["fetch"](cfg)
-                    else:
-                        results[v] = {"name":v,"error":"unknown vendor","daily":[],"monthly":[]}
+                if "report_fetch" in type_meta:
+                    results = type_meta["report_fetch"](cfg)
+                else:
+                    for v in vendor_ids:
+                        vm = all_vendors.get(v)
+                        if vm and "fetch" in vm:
+                            results[v] = vm["fetch"](cfg)
+                        else:
+                            results[v] = {"name":v,"error":"unknown vendor","daily":[],"monthly":[]}
                 now = int(_tr.time())
                 db.execute("UPDATE reports SET last_refresh=?, cached_data=? WHERE id=?",
                            (now, _json_r.dumps(results), rid))
