@@ -3887,6 +3887,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <div id="files-view" style="display:none;flex-direction:column;flex:1;min-height:0;">
   <div style="padding:8px 12px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);flex-shrink:0;">
     <div id="files-breadcrumb" style="flex:1;font-size:0.82rem;font-family:'SF Mono','Fira Code',monospace;overflow-x:auto;white-space:nowrap;"></div>
+    <button class="btn" id="files-home-btn" onclick="loadFiles(_filesCwd)" style="font-size:0.7rem;padding:2px 8px;" title="Go to working directory">&#x1F3E0;</button>
+    <button class="btn" id="files-setcwd-btn" onclick="setFilesCwd()" style="font-size:0.7rem;padding:2px 8px;" title="Set current directory as working directory">&#x1F4CC; Set CWD</button>
     <button class="btn" id="files-hidden-btn" onclick="toggleFilesHidden()" style="font-size:0.7rem;padding:2px 8px;" title="Show hidden files">.*</button>
   </div>
   <div id="files-body" style="flex:1;overflow-y:auto;padding:0;"></div>
@@ -6090,7 +6092,7 @@ function linkifyOutput(text) {
       html += esc(text.slice(last, match.start));
     }
     if (match.type === 'url') {
-      html += `<a href="${esc(match.value)}" target="_blank" rel="noopener" onclick="if(window.getSelection().toString())return;event.preventDefault();event.stopPropagation();window.open(this.href,'_blank','noopener,noreferrer')">${esc(match.value)}</a>`;
+      html += `<a href="${esc(match.value)}" target="_blank" rel="noopener noreferrer">${esc(match.value)}</a>`;
     } else if (match.type === 'file') {
       const rawPath = match.value.replace(/:[\d]+$/, '');  // strip :linenum
       const isMd = /\.md$/i.test(rawPath);
@@ -6870,15 +6872,29 @@ let _explorePath = '';
 let _exploreShowHidden = false;
 // ═══════ FILES TAB (inline directory browser) ═══════
 let _filesPath = '/';
+let _filesCwd = '/';   // saved working directory (persisted on server)
 let _filesShowHidden = false;
 // Load saved working dir from server prefs
 (async () => {
   try {
     const r = await fetch(API + '/api/prefs?key=files_cwd');
     const d = await r.json();
-    if (d.value) _filesPath = d.value;
+    if (d.value) { _filesPath = d.value; _filesCwd = d.value; }
   } catch(e) {}
 })();
+function setFilesCwd() {
+  _filesCwd = _filesPath;
+  fetch(API + '/api/prefs', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({key:'files_cwd', value:_filesCwd})}).catch(()=>{});
+  _updateFilesCwdBtn();
+}
+function _updateFilesCwdBtn() {
+  const btn = document.getElementById('files-setcwd-btn');
+  if (!btn) return;
+  const isHome = _filesPath === _filesCwd;
+  btn.style.background = isHome ? 'var(--accent)' : '';
+  btn.style.color = isHome ? '#000' : '';
+  btn.title = isHome ? 'Working directory: ' + _filesCwd : 'Set ' + _filesPath + ' as working directory';
+}
 function toggleFilesHidden() {
   _filesShowHidden = !_filesShowHidden;
   const btn = document.getElementById('files-hidden-btn');
@@ -6890,8 +6906,7 @@ async function loadFiles(path) {
   const body = document.getElementById('files-body');
   body.innerHTML = '<div style="padding:16px;color:var(--dim)">Loading...</div>';
   _filesPath = path;
-  // Persist working dir to server
-  fetch(API + '/api/prefs', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({key:'files_cwd', value:path})}).catch(()=>{});
+  _updateFilesCwdBtn();
   // Breadcrumb
   const parts = path.split('/').filter(Boolean);
   let crumbHtml = '<span class="explore-crumb" onclick="loadFiles(\'/\')">/</span>';
