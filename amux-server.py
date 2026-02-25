@@ -2870,6 +2870,20 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .file-overlay-body.markdown strong { font-weight: 700; }
   .file-overlay-body.markdown em { font-style: italic; }
   .file-overlay-body.markdown hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+  .file-overlay-body.markdown table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 0.84rem; overflow-x: auto; display: block; }
+  .file-overlay-body.markdown thead { background: var(--card); }
+  .file-overlay-body.markdown th { font-weight: 600; text-align: left; padding: 8px 12px; border: 1px solid var(--border); white-space: nowrap; }
+  .file-overlay-body.markdown td { padding: 6px 12px; border: 1px solid var(--border); }
+  .file-overlay-body.markdown tbody tr:nth-child(even) { background: rgba(88,166,255,0.04); }
+  .file-overlay-body.markdown tbody tr:hover { background: rgba(88,166,255,0.08); }
+  .file-overlay-body.markdown img { max-width: 100%; border-radius: 6px; margin: 8px 0; }
+  .file-overlay-body.markdown input[type="checkbox"] { margin-right: 6px; pointer-events: none; }
+  .file-overlay-body.markdown del { color: var(--dim); }
+  /* Board/memory markdown preview tables */
+  .board-detail-preview table, .peek-memory-editor table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 0.84rem; }
+  .board-detail-preview th, .peek-memory-editor th { font-weight: 600; text-align: left; padding: 6px 10px; border: 1px solid var(--border); background: var(--card); }
+  .board-detail-preview td, .peek-memory-editor td { padding: 5px 10px; border: 1px solid var(--border); }
+  .board-detail-preview tbody tr:nth-child(even), .peek-memory-editor tbody tr:nth-child(even) { background: rgba(88,166,255,0.04); }
 
   /* File explorer */
   .explore-breadcrumb { font-size: 0.8rem; overflow-x: auto; white-space: nowrap; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
@@ -7835,50 +7849,7 @@ async function loadExplore(path) {
   });
 })();
 
-function renderMarkdown(md) {
-  // Lightweight markdown renderer — handles common elements
-  let html = md;
-  // Escape HTML first
-  html = html.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  // Code blocks (``` ... ```)
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => `<pre><code>${code.trim()}</code></pre>`);
-  // Inline code
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-  // Headers
-  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-  // Bold / italic
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-  // Blockquotes
-  html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
-  // Horizontal rules
-  html = html.replace(/^---+$/gm, '<hr>');
-  // Links: [text](url)
-  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-  // Unordered lists
-  html = html.replace(/^[-*] (.+)$/gm, '<li>$1</li>');
-  html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
-  // Paragraphs (double newline)
-  html = html.replace(/\n\n+/g, '</p><p>');
-  html = '<p>' + html + '</p>';
-  // Clean up empty paragraphs
-  html = html.replace(/<p>\s*<\/p>/g, '');
-  html = html.replace(/<p>\s*(<h[123]>)/g, '$1');
-  html = html.replace(/(<\/h[123]>)\s*<\/p>/g, '$1');
-  html = html.replace(/<p>\s*(<pre>)/g, '$1');
-  html = html.replace(/(<\/pre>)\s*<\/p>/g, '$1');
-  html = html.replace(/<p>\s*(<ul>)/g, '$1');
-  html = html.replace(/(<\/ul>)\s*<\/p>/g, '$1');
-  html = html.replace(/<p>\s*(<hr>)/g, '$1');
-  html = html.replace(/(<hr>)\s*<\/p>/g, '$1');
-  html = html.replace(/<p>\s*(<blockquote>)/g, '$1');
-  html = html.replace(/(<\/blockquote>)\s*<\/p>/g, '$1');
-  // Linkify remaining URLs in text
-  html = html.replace(/(^|[^"'>])(https?:\/\/[^\s<]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
-  return html;
-}
+// renderMarkdown() — defined once below (board detail section), uses marked.js with fallback
 
 // ── Connect to existing tmux session ──
 async function openConnect() {
@@ -9136,26 +9107,30 @@ function timeAgo(ts) {
 
 function renderMarkdown(raw) {
   if (!raw) return '';
+  // Use marked.js for full GFM support (tables, task lists, strikethrough, etc.)
+  if (typeof marked !== 'undefined') {
+    try {
+      return marked.parse(raw, { gfm: true, breaks: true });
+    } catch(e) { /* fall through to basic renderer */ }
+  }
+  // Fallback: basic renderer if marked.js failed to load
   const parts = raw.split(/(```[\s\S]*?```)/g);
   return parts.map((part, i) => {
     if (i % 2 === 1) {
       const m = part.match(/^```(\w*)\n?([\s\S]*?)```$/);
-      const lang = m ? esc(m[1]) : '';
       const code = m ? esc(m[2]) : esc(part);
-      return '<pre><code' + (lang ? ' class="language-' + lang + '"' : '') + '>' + code + '</code></pre>';
+      return '<pre><code>' + code + '</code></pre>';
     }
     let s = part.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     s = s.replace(/^### (.+)$/gm, '<h3>$1</h3>');
     s = s.replace(/^## (.+)$/gm, '<h2>$1</h2>');
     s = s.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-    s = s.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
     s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
-    s = s.replace(/_(.+?)_/g, '<em>$1</em>');
     s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
     s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, url) => {
       const safe = /^(https?:\/\/|\/|#)/.test(url) ? url : '#';
-      return `<a href="${safe}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+      return '<a href="' + safe + '" target="_blank">' + text + '</a>';
     });
     s = s.replace(/^---$/gm, '<hr>');
     s = s.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
@@ -9163,13 +9138,9 @@ function renderMarkdown(raw) {
       const items = block.trim().split('\n').map(l => '<li>' + l.replace(/^[-*] /, '') + '</li>').join('');
       return '<ul>' + items + '</ul>';
     });
-    s = s.replace(/((?:^\d+\. .+\n?)+)/gm, (block) => {
-      const items = block.trim().split('\n').map(l => '<li>' + l.replace(/^\d+\. /, '') + '</li>').join('');
-      return '<ol>' + items + '</ol>';
-    });
     s = s.replace(/\n\n+/g, '</p><p>');
     s = s.replace(/\n/g, '<br>');
-    if (s && !s.startsWith('<h') && !s.startsWith('<ul') && !s.startsWith('<ol') && !s.startsWith('<blockquote') && !s.startsWith('<hr') && !s.startsWith('<pre')) {
+    if (s && !s.startsWith('<h') && !s.startsWith('<ul') && !s.startsWith('<blockquote') && !s.startsWith('<hr') && !s.startsWith('<pre')) {
       s = '<p>' + s + '</p>';
     }
     return s;
@@ -11622,6 +11593,7 @@ async function pullFromRemote(btn) {
   _dtLogPush('info', '[devtools] Panel initialised — ' + new Date().toLocaleString());
 })();
 </script>
+<script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gridstack@7/dist/gridstack-all.js"></script>
