@@ -1310,13 +1310,15 @@ _REPORT_TYPE_REGISTRY = {
     },
     "posthog-analytics": {
         "label": "PostHog Analytics",
-        "description": "Product analytics via PostHog — active users, new signups, and total events (daily/weekly/monthly). Config: days (default 90), ops_url, ops_token.",
+        "description": "Product analytics — PostHog active/new users, total events, plus auth signups and new orgs from MongoDB (daily/weekly/monthly). Config: days (default 90), ops_url, ops_token.",
         "report_fetch": _report_fetch_posthog_all,
         "display": "count",
         "vendors": {
-            "active_users": {"label": "Active Users", "color": "#F64E0F", "env_vars": []},
-            "new_users":    {"label": "New Users",    "color": "#1D4ED8", "env_vars": []},
-            "total_events": {"label": "Total Events", "color": "#059669", "env_vars": []},
+            "active_users":  {"label": "Active Users",  "color": "#F64E0F", "env_vars": []},
+            "new_users":     {"label": "New Users",     "color": "#1D4ED8", "env_vars": []},
+            "total_events":  {"label": "Total Events",  "color": "#059669", "env_vars": []},
+            "auth_signups":  {"label": "Auth Signups",  "color": "#7C3AED", "env_vars": []},
+            "auth_new_orgs": {"label": "New Orgs",      "color": "#D97706", "env_vars": []},
         },
     },
     # Add more report types here, e.g.:
