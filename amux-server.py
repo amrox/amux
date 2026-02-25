@@ -9107,11 +9107,18 @@ function _renderCalWeek(titleEl, bodyEl) {
           + ' onclick="openBoardAdd(\'' + ds + '\')">';
     html += '<div class="cal-week-num">' + d.getDate() + '</div>';
     items.slice(0, 4).forEach(item => {
-      const sty = statusStyle(item.status || 'todo');
-      html += '<div class="cal-week-chip" style="background:' + sty.bg + ';color:' + sty.color + '"'
-            + ' onclick="event.stopPropagation();openBoardDetail(\'' + item.id + '\')"'
-            + ' title="' + esc(item.title) + '">' + esc(item.title) + '</div>';
-      html += '<div class="cal-week-dot" style="background:' + sty.color + '"></div>';
+      if (item._isSched) {
+        html += '<div class="cal-week-chip sched-chip"'
+              + ' onclick="event.stopPropagation();openSchedModal(\'' + item.id + '\')"'
+              + ' title="' + esc(item.title) + '">' + esc(item.title) + '</div>';
+        html += '<div class="cal-week-dot" style="background:#c084fc"></div>';
+      } else {
+        const sty = statusStyle(item.status || 'todo');
+        html += '<div class="cal-week-chip" style="background:' + sty.bg + ';color:' + sty.color + '"'
+              + ' onclick="event.stopPropagation();openBoardDetail(\'' + item.id + '\')"'
+              + ' title="' + esc(item.title) + '">' + esc(item.title) + '</div>';
+        html += '<div class="cal-week-dot" style="background:' + sty.color + '"></div>';
+      }
     });
     if (items.length > 4) html += '<div class="cal-week-more">+' + (items.length - 4) + '</div>';
     html += '</div>';
@@ -9131,15 +9138,26 @@ function _renderCalDay(titleEl, bodyEl) {
     html += '<div class="cal-day-empty">No issues due on this day</div>';
   } else {
     items.forEach(item => {
-      const sty = statusStyle(item.status || 'todo');
-      html += '<div class="cal-day-issue" onclick="openBoardDetail(\'' + item.id + '\')">';
-      html += '<span class="cal-dot" style="background:' + sty.color + ';width:8px;height:8px;flex-shrink:0;border-radius:50%;margin-top:5px;"></span>';
-      html += '<div class="cal-day-issue-text">';
-      html += '<div class="cal-day-issue-title">' + esc(item.title) + '</div>';
-      if (item.desc) html += '<div class="cal-day-issue-desc">' + esc(item.desc) + '</div>';
-      html += '</div>';
-      html += '<span style="font-size:0.7rem;padding:2px 7px;border-radius:10px;background:' + sty.bg + ';color:' + sty.color + ';flex-shrink:0;">' + esc(item.status || 'todo') + '</span>';
-      html += '</div>';
+      if (item._isSched) {
+        html += '<div class="cal-day-issue" onclick="openSchedModal(\'' + item.id + '\')">';
+        html += '<span class="cal-dot" style="background:#c084fc;width:8px;height:8px;flex-shrink:0;border-radius:50%;margin-top:5px;"></span>';
+        html += '<div class="cal-day-issue-text">';
+        html += '<div class="cal-day-issue-title">' + esc(item.title) + '</div>';
+        if (item.desc) html += '<div class="cal-day-issue-desc">' + esc(item.desc) + '</div>';
+        html += '</div>';
+        html += '<span style="font-size:0.7rem;padding:2px 7px;border-radius:10px;background:rgba(163,113,247,0.18);color:#c084fc;flex-shrink:0;">schedule</span>';
+        html += '</div>';
+      } else {
+        const sty = statusStyle(item.status || 'todo');
+        html += '<div class="cal-day-issue" onclick="openBoardDetail(\'' + item.id + '\')">';
+        html += '<span class="cal-dot" style="background:' + sty.color + ';width:8px;height:8px;flex-shrink:0;border-radius:50%;margin-top:5px;"></span>';
+        html += '<div class="cal-day-issue-text">';
+        html += '<div class="cal-day-issue-title">' + esc(item.title) + '</div>';
+        if (item.desc) html += '<div class="cal-day-issue-desc">' + esc(item.desc) + '</div>';
+        html += '</div>';
+        html += '<span style="font-size:0.7rem;padding:2px 7px;border-radius:10px;background:' + sty.bg + ';color:' + sty.color + ';flex-shrink:0;">' + esc(item.status || 'todo') + '</span>';
+        html += '</div>';
+      }
     });
   }
   html += '<button class="cal-day-add" onclick="openBoardAdd(\'' + ds + '\')">+ Add issue for this day</button>';
