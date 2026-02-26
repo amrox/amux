@@ -123,6 +123,50 @@ systemctl daemon-reload
 systemctl enable amux
 # Don't start yet — amux-server.py hasn't been deployed
 
+# ── Connectivity watchdog (auto-reboot if GCP metadata server goes dark) ──
+cat > /usr/local/bin/amux-watchdog.sh <<'WATCHDOG'
+#!/bin/bash
+# Reboots if the GCP metadata server is unreachable for 5+ minutes.
+# This catches kernel network stack failures before Tailscale/SSH die.
+FAIL_COUNT=0
+FAIL_THRESHOLD=10  # 10 * 30s = 5 minutes
+while true; do
+  sleep 30
+  if curl -sf --max-time 5 http://169.254.169.254/computeMetadata/v1/instance/hostname \
+      -H 'Metadata-Flavor: Google' >/dev/null 2>&1; then
+    FAIL_COUNT=0
+    continue
+  fi
+  FAIL_COUNT=$((FAIL_COUNT + 1))
+  logger -t amux-watchdog "metadata unreachable (fail ${FAIL_COUNT}/${FAIL_THRESHOLD})"
+  if [ "$FAIL_COUNT" -ge "$FAIL_THRESHOLD" ]; then
+    logger -t amux-watchdog "network dead 5+ min — rebooting"
+    systemctl reboot
+  fi
+done
+WATCHDOG
+chmod +x /usr/local/bin/amux-watchdog.sh
+
+cat > /etc/systemd/system/amux-watchdog.service <<WDEOF
+[Unit]
+Description=amux connectivity watchdog
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/amux-watchdog.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+WDEOF
+
+systemctl daemon-reload
+systemctl enable amux-watchdog
+systemctl start amux-watchdog
+
 # ── Cert renewal cron (weekly) ──
 if [ -n "$TS_HOSTNAME" ]; then
   cat > /etc/cron.weekly/amux-cert-renew <<CRONEOF
