@@ -6996,7 +6996,10 @@ async function toggleMic() {
           autoGrow(inp);
           inp.focus();
         } else {
-          showToast('Transcription failed: ' + (d.error || 'unknown'));
+          const msg = r.status === 429
+            ? 'Rate limited — wait a moment and try again'
+            : 'Transcription failed: ' + (d.error || 'unknown');
+          showToast(msg);
         }
       } catch(e) {
         showToast('Transcription error: ' + e.message);
@@ -12903,6 +12906,13 @@ class CCHandler(BaseHTTPRequestHandler):
                     with _urq.urlopen(req, timeout=30, context=_ssl_ctx) as r:
                         result = json.loads(r.read())
                     return self._json({"text": result.get("text", "")})
+                except _urq.error.HTTPError as e:
+                    try:
+                        err_body = json.loads(e.read().decode("utf-8", errors="replace"))
+                        err_msg = err_body.get("error", {}).get("message", str(e))
+                    except Exception:
+                        err_msg = str(e)
+                    return self._json({"error": err_msg}, e.code)
                 except Exception as e:
                     return self._json({"error": str(e)}, 500)
 
