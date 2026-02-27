@@ -2969,6 +2969,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .explore-menu-item { display: block; width: 100%; background: none; border: none; text-align: left;
     padding: 11px 16px; font-size: 0.88rem; color: var(--text); cursor: pointer; }
   .explore-menu-item:active, .explore-menu-item:hover { background: var(--hover); }
+  .explore-row-pinned { border-left: 2px solid var(--accent); }
+  .explore-pin-dot { font-size: 0.75rem; margin-right: 2px; opacity: 0.7; flex-shrink: 0; }
 
   /* Connect session list */
   /* Calendar */
@@ -7861,6 +7863,20 @@ let _exploreShowHidden = false;
 let _filesPath = '/';
 let _filesCwd = '/';   // saved working directory (persisted on server)
 let _filesShowHidden = false;
+
+// ── File pins (persisted in localStorage) ──
+const _PINS_KEY = 'amux_file_pins';
+function _loadPins() {
+  try { return JSON.parse(localStorage.getItem(_PINS_KEY) || '[]'); } catch(e) { return []; }
+}
+function _savePins(pins) { localStorage.setItem(_PINS_KEY, JSON.stringify(pins)); }
+function _isPinned(path) { return _loadPins().includes(path); }
+function _togglePin(path) {
+  const pins = _loadPins();
+  const i = pins.indexOf(path);
+  if (i >= 0) pins.splice(i, 1); else pins.push(path);
+  _savePins(pins);
+}
 // Load saved working dir from server prefs
 (async () => {
   try {
@@ -7909,6 +7925,7 @@ async function loadFiles(path) {
     const data = await r.json();
     if (data.error) { body.innerHTML = '<div style="padding:16px;color:var(--dim)">' + esc(data.error) + '</div>'; return; }
     _renderFilesEntries(body, path, data, false);
+    _idb.setFile(path, { type: 'dir', data });
   } catch(e) {
     // Offline: try IDB cache
     const cached = await _idb.getFile(path);
@@ -7937,15 +7954,23 @@ function _renderFilesEntries(body, path, data, cacheTs) {
     body.innerHTML += '<div style="padding:16px;color:var(--dim)">Empty directory</div>';
     return;
   }
-  for (const entry of data.entries) {
+  const pins = _loadPins();
+  const pinSet = new Set(pins);
+  // Sort: pinned first (preserving pin order), then dirs, then files
+  const pinned = pins.map(p => data.entries.find(e => path.replace(/\/$/, '') + '/' + e.name === p)).filter(Boolean);
+  const rest = data.entries.filter(e => !pinSet.has(path.replace(/\/$/, '') + '/' + e.name));
+  const sorted = [...pinned, ...rest];
+  for (const entry of sorted) {
+    const entryPath = path.replace(/\/$/, '') + '/' + entry.name;
+    const isPinned = pinSet.has(entryPath);
     const row = document.createElement('div');
-    row.className = 'explore-row';
+    row.className = 'explore-row' + (isPinned ? ' explore-row-pinned' : '');
     const icon = entry.type === 'dir' ? '&#x1F4C2;' : '&#x1F4C4;';
     const displayName = entry.name + (entry.type === 'dir' ? '/' : '');
-    const entryPath = path.replace(/\/$/, '') + '/' + entry.name;
-    const menuBtn = '<button class="explore-menu-btn" title="Options" onclick="event.stopPropagation();_showExploreMenu(\'' + entryPath.replace(/'/g, "\\'") + '\',this)">⋯</button>';
+    const pinIndicator = isPinned ? '<span class="explore-pin-dot" title="Pinned">&#x1F4CC;</span>' : '';
+    const menuBtn = '<button class="explore-menu-btn" title="Options" onclick="event.stopPropagation();_showFilesMenu(\'' + entryPath.replace(/'/g, "\\'") + '\',this)">⋯</button>';
     const mtime = entry.modified ? '<span class="explore-mtime">' + timeAgo(entry.modified) + '</span>' : '';
-    row.innerHTML = '<span class="explore-icon">' + icon + '</span><span class="explore-name">' + esc(displayName) + '</span><span class="explore-size">' + esc(_fmtSize(entry.size)) + '</span>' + mtime + menuBtn;
+    row.innerHTML = '<span class="explore-icon">' + icon + '</span>' + pinIndicator + '<span class="explore-name">' + esc(displayName) + '</span><span class="explore-size">' + esc(_fmtSize(entry.size)) + '</span>' + mtime + menuBtn;
     if (entry.type === 'dir') {
       row.onclick = () => loadFiles(entryPath);
     } else {
@@ -8057,6 +8082,37 @@ function _showExploreMenu(path, btn) {
   popup.style.left = left + 'px';
   popup.style.top = top + 'px';
   // Dismiss on outside tap
+  setTimeout(() => {
+    const dismiss = e => { if (!popup.contains(e.target)) { popup.remove(); document.removeEventListener('pointerdown', dismiss, true); } };
+    document.addEventListener('pointerdown', dismiss, true);
+  }, 0);
+}
+function _showFilesMenu(path, btn) {
+  document.querySelectorAll('.explore-menu-popup').forEach(el => el.remove());
+  const popup = document.createElement('div');
+  popup.className = 'explore-menu-popup';
+  // Pin / Unpin
+  const pinItem = document.createElement('button');
+  pinItem.className = 'explore-menu-item';
+  const pinned = _isPinned(path);
+  pinItem.textContent = pinned ? '📌 Unpin' : '📌 Pin to top';
+  pinItem.onclick = () => { popup.remove(); _togglePin(path); loadFiles(_filesPath); };
+  popup.appendChild(pinItem);
+  // Copy path
+  const copyItem = document.createElement('button');
+  copyItem.className = 'explore-menu-item';
+  copyItem.textContent = 'Copy path';
+  copyItem.onclick = () => { popup.remove(); _copyExplorePath(path); };
+  popup.appendChild(copyItem);
+  document.body.appendChild(popup);
+  const r = btn.getBoundingClientRect();
+  const pw = popup.offsetWidth || 160;
+  let left = r.right - pw;
+  if (left < 8) left = 8;
+  let top = r.bottom + 4;
+  if (top + 100 > window.innerHeight) top = r.top - 100;
+  popup.style.left = left + 'px';
+  popup.style.top = top + 'px';
   setTimeout(() => {
     const dismiss = e => { if (!popup.contains(e.target)) { popup.remove(); document.removeEventListener('pointerdown', dismiss, true); } };
     document.addEventListener('pointerdown', dismiss, true);
@@ -10971,7 +11027,7 @@ const _idb = (() => {
   let db = null;
   const open = () => new Promise((resolve, reject) => {
     if (db) return resolve(db);
-    const req = indexedDB.open('amux', 3);
+    const req = indexedDB.open('amux', 4);
     req.onupgradeneeded = () => {
       const d = req.result;
       if (!d.objectStoreNames.contains('kv')) d.createObjectStore('kv');
