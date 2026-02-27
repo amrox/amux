@@ -181,7 +181,9 @@ _session_auto_actions: dict = {} # {name: {"last_compact": ts, "last_restart": t
 _rb_proc: subprocess.Popen | None = None
 _rb_lock = threading.Lock()
 _rb_profile: str = "default"  # current active profile name
+_rb_last_video: str | None = None  # path to last recorded video (mp4 or webm)
 _RB_PROFILES_DIR = CC_HOME / "playwright-auth" / "profiles"
+_RB_VIDEOS_DIR = CC_HOME / "browser-videos"
 
 _RB_AGENT_SCRIPT = r"""
 const { chromium } = require('PLAYWRIGHT_PATH');
@@ -191,6 +193,7 @@ const readline = require('readline');
 let ctx = null, page = null;
 const PROFILES_DIR = homedir() + '/.amux/playwright-auth/profiles';
 const DEFAULT_PROFILE = homedir() + '/.amux/playwright-auth/profile';
+const VIDEOS_DIR = homedir() + '/.amux/browser-videos';
 const fs = require('fs');
 
 const rl = readline.createInterface({ input: process.stdin, terminal: false });
@@ -208,12 +211,18 @@ rl.on('line', async (line) => {
           fs.mkdirSync(profilePath, { recursive: true });
         }
         const headed = !!cmd.headed;
-        ctx = await chromium.launchPersistentContext(profilePath, {
+        const record = !!cmd.record;
+        const ctxOpts = {
           headless: !headed,
           viewport: headed ? null : { width: 1280, height: 800 },
           ignoreHTTPSErrors: true,
           args: ['--no-first-run', '--disable-blink-features=AutomationControlled'],
-        });
+        };
+        if (record) {
+          fs.mkdirSync(VIDEOS_DIR, { recursive: true });
+          ctxOpts.recordVideo = { dir: VIDEOS_DIR, size: { width: 1280, height: 800 } };
+        }
+        ctx = await chromium.launchPersistentContext(profilePath, ctxOpts);
         page = ctx.pages()[0] || await ctx.newPage();
         if (cmd.url && !headed) {
           await page.goto(cmd.url, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(()=>{});
@@ -284,8 +293,16 @@ rl.on('line', async (line) => {
         break;
       }
       case 'stop': {
-        if (ctx) { try { await ctx.close(); } catch(e) {} ctx = null; page = null; }
-        respond({ ok: true });
+        let videoPath = null;
+        if (ctx) {
+          try {
+            const vid = page && page.video ? page.video() : null;
+            await ctx.close();
+            if (vid) { try { videoPath = await vid.path(); } catch(e) {} }
+          } catch(e) {}
+          ctx = null; page = null;
+        }
+        respond({ ok: true, videoPath });
         process.exit(0);
         break;
       }
@@ -4414,7 +4431,14 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <button class="btn" onclick="_rbNewProfile()" style="font-size:0.6rem;padding:1px 6px;">+ New</button>
     <button class="btn" id="rb-del-profile" onclick="_rbDeleteProfile()" style="font-size:0.6rem;padding:1px 6px;color:var(--red);display:none;" title="Delete profile">&#x2715;</button>
     <button class="btn" onclick="_rbLogin()" style="font-size:0.6rem;padding:1px 8px;" title="Open headed browser to log in and save credentials">&#x1F511; Login</button>
+    <button class="btn" id="rb-rec-btn" onclick="_rbToggleRecord()" style="font-size:0.6rem;padding:1px 8px;" title="Toggle video recording (takes effect on next launch)">&#x23FA; Rec</button>
     <span id="rb-profile-status" style="color:var(--dim);margin-left:auto;"></span>
+  </div>
+  <!-- Recording download banner -->
+  <div id="rb-video-banner" style="display:none;padding:5px 12px;background:var(--card-bg);border-bottom:1px solid var(--border);font-size:0.72rem;display:none;align-items:center;gap:8px;">
+    <span>&#x1F3A5; Recording ready —</span>
+    <a id="rb-video-link" href="/api/browser/video" download style="color:var(--accent);text-decoration:none;font-weight:600;">Download MP4</a>
+    <button class="btn" onclick="document.getElementById('rb-video-banner').style.display='none'" style="font-size:0.6rem;padding:1px 6px;margin-left:auto;">&#x2715;</button>
   </div>
   <!-- URL bar -->
   <div style="padding:6px 12px;display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--border);flex-shrink:0;">
@@ -7663,6 +7687,7 @@ let _rbActive = false;
 let _rbLoading = false;
 let _rbCurrentProfile = 'default';
 let _rbLoginMode = false;
+let _rbRecordEnabled = false;  // whether to record on next launch
 
 async function _rbLoadProfiles() {
   try {
@@ -7729,6 +7754,7 @@ async function _rbStart(url) {
   try {
     const body = { url: url || '' };
     if (_rbCurrentProfile && _rbCurrentProfile !== 'default') body.profile = _rbCurrentProfile;
+    if (_rbRecordEnabled) body.record = true;
     const r = await fetch(API + '/api/browser/start', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body),
@@ -7740,8 +7766,11 @@ async function _rbStart(url) {
       _rbCurrentProfile = d.profile;
       document.getElementById('rb-profile').value = d.profile;
     }
-    document.getElementById('rb-profile-status').textContent = 'Active: ' + _rbCurrentProfile;
+    const recLabel = _rbRecordEnabled ? ' \u25CF REC' : '';
+    document.getElementById('rb-profile-status').textContent = 'Active: ' + _rbCurrentProfile + recLabel;
+    if (_rbRecordEnabled) document.getElementById('rb-profile-status').style.color = 'var(--red)';
     status.textContent = '';
+    document.getElementById('rb-video-banner').style.display = 'none';
     document.getElementById('rb-placeholder').style.display = 'none';
     document.getElementById('rb-screen').style.display = 'block';
     await _rbRefresh();
@@ -7752,7 +7781,12 @@ async function _rbStart(url) {
 }
 
 async function _rbStop() {
-  try { await fetch(API + '/api/browser/stop', { method: 'POST' }); } catch(e) {}
+  let videoReady = false;
+  try {
+    const r = await fetch(API + '/api/browser/stop', { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    videoReady = !!d.videoReady;
+  } catch(e) {}
   _rbActive = false;
   _rbLoginMode = false;
   document.getElementById('rb-screen').style.display = 'none';
@@ -7761,7 +7795,34 @@ async function _rbStop() {
   document.getElementById('rb-placeholder').style.display = '';
   document.getElementById('rb-url').value = '';
   document.getElementById('rb-status').textContent = '';
-  document.getElementById('rb-profile-status').textContent = '';
+  const ps = document.getElementById('rb-profile-status');
+  ps.textContent = '';
+  ps.style.color = '';
+  _rbSetRecord(_rbRecordEnabled); // re-sync button state
+  if (videoReady) {
+    const banner = document.getElementById('rb-video-banner');
+    document.getElementById('rb-video-link').href = API + '/api/browser/video?t=' + Date.now();
+    banner.style.display = 'flex';
+  }
+}
+
+function _rbToggleRecord() {
+  _rbSetRecord(!_rbRecordEnabled);
+}
+
+function _rbSetRecord(enabled) {
+  _rbRecordEnabled = enabled;
+  const btn = document.getElementById('rb-rec-btn');
+  if (!btn) return;
+  if (enabled) {
+    btn.style.color = 'var(--red)';
+    btn.style.fontWeight = '700';
+    btn.title = 'Recording ON — will record on next launch (click to disable)';
+  } else {
+    btn.style.color = '';
+    btn.style.fontWeight = '';
+    btn.title = 'Toggle video recording (takes effect on next launch)';
+  }
 }
 
 async function _rbLogin() {
@@ -12778,6 +12839,8 @@ class CCHandler(BaseHTTPRequestHandler):
             cmd = {"action": "start", "url": body.get("url", "")}
             if body.get("headed"):
                 cmd["headed"] = True
+            if body.get("record"):
+                cmd["record"] = True
             if profile and profile != "default":
                 cmd["profile"] = profile
                 _rb_profile = profile
@@ -12789,8 +12852,39 @@ class CCHandler(BaseHTTPRequestHandler):
             return self._json(result, 200 if result.get("ok") else 500)
 
         if method == "POST" and path == "/api/browser/stop":
+            global _rb_last_video
             result = _rb_send({"action": "stop"})
-            return self._json({"ok": True})
+            _rb_last_video = None
+            webm = result.get("videoPath")
+            if webm and os.path.exists(webm):
+                mp4 = webm.rsplit(".", 1)[0] + ".mp4"
+                try:
+                    subprocess.run(
+                        ["ffmpeg", "-y", "-i", webm, "-c:v", "libx264",
+                         "-preset", "fast", "-crf", "22", "-pix_fmt", "yuv420p", mp4],
+                        capture_output=True, timeout=120
+                    )
+                    _rb_last_video = mp4 if os.path.exists(mp4) else webm
+                except Exception:
+                    _rb_last_video = webm
+            return self._json({"ok": True, "videoReady": bool(_rb_last_video)})
+
+        # GET /api/browser/video — download latest recorded video
+        if method == "GET" and path == "/api/browser/video":
+            if not _rb_last_video or not os.path.exists(_rb_last_video):
+                return self._json({"error": "no video"}, 404)
+            ext = Path(_rb_last_video).suffix.lower()
+            mime = "video/mp4" if ext == ".mp4" else "video/webm"
+            data = open(_rb_last_video, "rb").read()
+            fname = Path(_rb_last_video).name
+            self.send_response(200)
+            self.send_header("Content-Type", mime)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+            return
 
         # GET /api/browser/profiles — list available profiles
         if method == "GET" and path == "/api/browser/profiles":
