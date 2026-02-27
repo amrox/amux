@@ -309,9 +309,12 @@ def _run_browser_agent(task: str, start_url: str = "", max_steps: int = 25):
         if webm and os.path.exists(webm):
             mp4 = webm.rsplit(".", 1)[0] + ".mp4"
             try:
+                # mpdecimate drops duplicate/idle frames; setpts reassigns timestamps at 25fps
                 subprocess.run(
-                    ["ffmpeg", "-y", "-i", webm, "-c:v", "libx264",
-                     "-preset", "fast", "-crf", "22", "-pix_fmt", "yuv420p", mp4],
+                    ["ffmpeg", "-y", "-i", webm,
+                     "-vf", "mpdecimate,setpts=N/25/TB", "-r", "25",
+                     "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+                     "-pix_fmt", "yuv420p", "-an", mp4],
                     capture_output=True, timeout=120,
                 )
                 _rb_last_video = mp4 if os.path.exists(mp4) else webm
@@ -13088,8 +13091,10 @@ class CCHandler(BaseHTTPRequestHandler):
                 mp4 = webm.rsplit(".", 1)[0] + ".mp4"
                 try:
                     subprocess.run(
-                        ["ffmpeg", "-y", "-i", webm, "-c:v", "libx264",
-                         "-preset", "fast", "-crf", "22", "-pix_fmt", "yuv420p", mp4],
+                        ["ffmpeg", "-y", "-i", webm,
+                         "-vf", "mpdecimate,setpts=N/25/TB", "-r", "25",
+                         "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+                         "-pix_fmt", "yuv420p", "-an", mp4],
                         capture_output=True, timeout=120
                     )
                     _rb_last_video = mp4 if os.path.exists(mp4) else webm
