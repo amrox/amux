@@ -2730,116 +2730,92 @@ def get_lan_ip() -> str:
 
 
 # ═══════════════════════════════════════════
-# EMAIL → GOOGLE CALENDAR SYNC
+# EMAIL → CALENDAR SYNC (macOS Mail.app + Calendar.app via AppleScript)
+# No OAuth required — uses the accounts already signed in to Mail.app.
 # ═══════════════════════════════════════════
 
-_GOOGLE_CLIENT_ID     = os.environ.get("AMUX_GOOGLE_CLIENT_ID", "")
-_GOOGLE_CLIENT_SECRET = os.environ.get("AMUX_GOOGLE_CLIENT_SECRET", "")
-_GOOGLE_REDIRECT_URI  = os.environ.get("AMUX_GOOGLE_REDIRECT_URI",
-                                       "https://localhost:8822/api/email/callback")
-_GOOGLE_SCOPES = [
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/calendar.events",
-    "openid",
-    "https://www.googleapis.com/auth/userinfo.email",
-]
-_EMAIL_SYNC_INTERVAL  = int(os.environ.get("AMUX_EMAIL_SYNC_INTERVAL", "900"))   # 15 min
-_EMAIL_LOOKBACK_DAYS  = int(os.environ.get("AMUX_EMAIL_LOOKBACK_DAYS",  "60"))
-_email_sync_lock      = threading.Lock()
-_email_oauth_states: dict = {}   # state → expiry ts (CSRF protection)
+_EMAIL_SYNC_INTERVAL = int(os.environ.get("AMUX_EMAIL_SYNC_INTERVAL", "900"))  # 15 min
+_EMAIL_LOOKBACK_DAYS = int(os.environ.get("AMUX_EMAIL_LOOKBACK_DAYS",  "60"))
+_EMAIL_CALENDAR_NAME = os.environ.get("AMUX_CALENDAR_NAME", "")  # empty = first writable calendar
+_email_sync_lock     = threading.Lock()
 
 
-def _google_refresh_token(account_id: str) -> None:
-    """Refresh OAuth access token using stored refresh_token."""
-    import urllib.request as _ur, urllib.parse as _up
-    db = get_db()
-    row = db.execute("SELECT refresh_token FROM email_accounts WHERE id=?", (account_id,)).fetchone()
-    if not row or not row["refresh_token"]:
-        raise RuntimeError("No refresh token — account must reconnect")
-    data = _up.urlencode({
-        "client_id": _GOOGLE_CLIENT_ID,
-        "client_secret": _GOOGLE_CLIENT_SECRET,
-        "refresh_token": row["refresh_token"],
-        "grant_type": "refresh_token",
-    }).encode()
-    req = _ur.Request("https://oauth2.googleapis.com/token", data=data,
-                      headers={"Content-Type": "application/x-www-form-urlencoded"})
-    with _ur.urlopen(req, timeout=15) as r:
-        tokens = json.loads(r.read())
-    expiry = int(time.time()) + tokens.get("expires_in", 3600)
-    db.execute("UPDATE email_accounts SET access_token=?, token_expiry=? WHERE id=?",
-               (tokens["access_token"], expiry, account_id))
-    db.commit()
-
-
-def _google_api(account_id: str, method: str, url: str,
-                body: dict = None, params: dict = None) -> dict:
-    """Authenticated Google API call with automatic token refresh."""
-    import urllib.request as _ur, urllib.parse as _up, urllib.error as _ue
-    db = get_db()
-    acc = db.execute("SELECT * FROM email_accounts WHERE id=?", (account_id,)).fetchone()
-    if not acc:
-        raise ValueError(f"Unknown account {account_id}")
-    # Refresh proactively if token expires within 60s
-    if not acc["access_token"] or (acc["token_expiry"] and acc["token_expiry"] < time.time() + 60):
-        _google_refresh_token(account_id)
-        acc = db.execute("SELECT * FROM email_accounts WHERE id=?", (account_id,)).fetchone()
-    token = acc["access_token"]
-    full_url = url + ("?" + _up.urlencode(params) if params else "")
-    data = json.dumps(body).encode() if body is not None else None
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    req = _ur.Request(full_url, data=data, headers=headers, method=method)
+def _mail_fetch_messages() -> list:
+    """
+    Read recent event-candidate emails from all Mail.app inboxes via AppleScript.
+    AppleScript string comparisons are case-insensitive, so no lowercasing needed.
+    Only fetches message content for emails whose subject/sender match keywords.
+    """
+    script = f"""
+set NL to ASCII character 10
+set output to ""
+set cutoff to (current date) - {_EMAIL_LOOKBACK_DAYS} * days
+tell application "Mail"
+    repeat with acct in accounts
+        set acctName to name of acct
+        repeat with mb in mailboxes of acct
+            if name of mb is "INBOX" then
+                set processed to 0
+                repeat with msg in (messages of mb)
+                    if processed >= 300 then exit repeat
+                    try
+                        if date received of msg < cutoff then exit repeat
+                    end try
+                    set processed to processed + 1
+                    try
+                        set subj to subject of msg
+                        set sndr to sender of msg
+                        if (subj contains "ticket" or subj contains "confirmation" or subj contains "reservation" or subj contains "booking" or subj contains "receipt" or subj contains "invitation" or subj contains "event reminder" or subj contains "your tickets" or subj contains "order confirm" or sndr contains "ticketmaster" or sndr contains "eventbrite" or sndr contains "axs.com" or sndr contains "dice.fm" or sndr contains "livenation" or sndr contains "stubhub" or sndr contains "songkick" or sndr contains "bandsintown" or sndr contains "etix" or sndr contains "tixr" or sndr contains "seetickets") then
+                            set rcvd to date received of msg as string
+                            set msgId to message id of msg
+                            set msgBody to content of msg
+                            if length of msgBody > 5000 then set msgBody to text 1 thru 5000 of msgBody
+                            set output to output & "MSG_START" & NL & acctName & NL & sndr & NL & rcvd & NL & subj & NL & msgId & NL & msgBody & "MSG_END" & NL
+                        end if
+                    end try
+                end repeat
+            end if
+        end repeat
+    end repeat
+end tell
+return output
+"""
     try:
-        with _ur.urlopen(req, timeout=30) as r:
-            resp_body = r.read()
-            return json.loads(resp_body) if resp_body else {}
-    except _ue.HTTPError as e:
-        if e.code == 401:
-            # Token rejected — try refresh once more
-            _google_refresh_token(account_id)
-            acc = db.execute("SELECT * FROM email_accounts WHERE id=?", (account_id,)).fetchone()
-            headers["Authorization"] = f"Bearer {acc['access_token']}"
-            req2 = _ur.Request(full_url, data=data, headers=headers, method=method)
-            with _ur.urlopen(req2, timeout=30) as r2:
-                rb = r2.read()
-                return json.loads(rb) if rb else {}
-        raise
-
-
-def _email_get_text(payload: dict) -> str:
-    """Recursively extract readable text from a Gmail message payload."""
-    import base64 as _b64, re as _re
-    mime = payload.get("mimeType", "")
-    body = payload.get("body", {})
-    parts = payload.get("parts", [])
-    if body.get("data"):
-        raw = _b64.urlsafe_b64decode(body["data"] + "==").decode("utf-8", errors="replace")
-        if mime == "text/plain":
-            return raw[:8000]
-        if mime == "text/html":
-            text = _re.sub(r'<style[^>]*>.*?</style>', ' ', raw, flags=_re.DOTALL | _re.IGNORECASE)
-            text = _re.sub(r'<script[^>]*>.*?</script>', ' ', text, flags=_re.DOTALL | _re.IGNORECASE)
-            text = _re.sub(r'<[^>]+>', ' ', text)
-            for ent, ch in [("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"),
-                            ("&#39;", "'"), ("&quot;", '"')]:
-                text = text.replace(ent, ch)
-            text = _re.sub(r'\s+', ' ', text)
-            return text.strip()[:8000]
-    plain, html = "", ""
-    for part in parts:
-        if part.get("mimeType") == "text/plain":
-            plain = _email_get_text(part)
-        elif part.get("mimeType") == "text/html":
-            html = _email_get_text(part)
-        elif part.get("mimeType", "").startswith("multipart/"):
-            r = _email_get_text(part)
-            if r:
-                return r
-    return plain or html
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=180,
+        )
+        if result.returncode != 0:
+            slog(f"[email] AppleScript error: {result.stderr[:300]}")
+            return []
+        messages = []
+        for block in result.stdout.split("MSG_START\n"):
+            if "MSG_END" not in block:
+                continue
+            content = block[: block.rfind("MSG_END")].strip()
+            lines = content.split("\n", 5)
+            if len(lines) < 5:
+                continue
+            messages.append({
+                "account": lines[0],
+                "sender":  lines[1],
+                "date":    lines[2],
+                "subject": lines[3],
+                "msg_id":  lines[4],
+                "body":    lines[5] if len(lines) > 5 else "",
+            })
+        slog(f"[email] Mail.app: {len(messages)} candidate emails")
+        return messages
+    except subprocess.TimeoutExpired:
+        slog("[email] Mail.app AppleScript timed out (>180s)")
+        return []
+    except Exception as e:
+        slog(f"[email] mail fetch error: {e}")
+        return []
 
 
 def _ai_extract_event(subject: str, sender: str, date_str: str, body: str) -> dict | None:
-    """Use Claude Haiku to extract event details from email. Returns dict or None."""
+    """Use Claude Haiku to extract event details from an email. Returns dict or None."""
     try:
         import anthropic
         client = anthropic.Anthropic()
@@ -2848,7 +2824,7 @@ def _ai_extract_event(subject: str, sender: str, date_str: str, body: str) -> di
 Email subject: {subject}
 From: {sender}
 Date received: {date_str}
-Body (first 3000 chars):
+Body:
 {body[:3000]}
 
 Respond with JSON only (no markdown fences):
@@ -2862,10 +2838,8 @@ If NOT an event email: {{"is_event": false}}"""
             messages=[{"role": "user", "content": prompt}],
         )
         text = msg.content[0].text.strip()
-        # Strip markdown fences if model adds them
         if text.startswith("```"):
-            text = "\n".join(text.split("\n")[1:])
-            text = text.rstrip("`").strip()
+            text = "\n".join(text.split("\n")[1:]).rstrip("`").strip()
         result = json.loads(text)
         if result.get("is_event") and float(result.get("confidence", 0)) >= 0.65:
             return result
@@ -2875,149 +2849,130 @@ If NOT an event email: {{"is_event": false}}"""
         return None
 
 
-def _gcal_create_event(account_id: str, event: dict) -> str | None:
-    """Create a Google Calendar event. Returns GCal event ID or None."""
-    import urllib.parse as _up
-    try:
-        acc = get_db().execute(
-            "SELECT calendar_id FROM email_accounts WHERE id=?", (account_id,)
-        ).fetchone()
-        cal_id = acc["calendar_id"] if acc else "primary"
-
-        def _dt(s):
-            if not s:
-                return None
-            if "T" in str(s):
-                return {"dateTime": s, "timeZone": "America/Los_Angeles"}
-            return {"date": str(s)[:10]}
-
-        start_dt = _dt(event.get("start"))
-        if not start_dt:
-            return None
-        end_dt = _dt(event.get("end"))
-        if not end_dt:
-            # Default 2-hour event or same-day
-            if "dateTime" in start_dt:
-                end_dt = start_dt  # Google will keep it as-is
-            else:
-                end_dt = start_dt
-
-        body = {
-            "summary": event.get("title", "Event"),
-            "location": event.get("location") or "",
-            "description": event.get("description") or "",
-            "start": start_dt,
-            "end": end_dt,
-        }
-        url = f"https://www.googleapis.com/calendar/v3/calendars/{_up.quote(cal_id, safe='')}/events"
-        result = _google_api(account_id, "POST", url, body=body)
-        return result.get("id")
-    except Exception as e:
-        slog(f"[email] GCal create error: {e}")
-        return None
-
-
-def _email_sync_account(account_id: str) -> None:
-    """Poll Gmail for event emails, extract with AI, push to Google Calendar."""
+def _cal_create_event(event: dict) -> bool:
+    """Create a Calendar.app event via AppleScript. Returns True on success."""
     from datetime import datetime, timedelta
-    import urllib.parse as _up
-    db = get_db()
-    after_dt = (datetime.now() - timedelta(days=_EMAIL_LOOKBACK_DAYS)).strftime("%Y/%m/%d")
-    query = (
-        f"after:{after_dt} ("
-        "subject:(ticket OR confirmation OR reservation OR booking OR receipt OR "
-        '"your order" OR invitation OR "you\'re going" OR "event reminder" OR "your tickets") '
-        "OR from:(ticketmaster.com OR eventbrite.com OR axs.com OR seetickets.com "
-        "OR stubhub.com OR dice.fm OR universe.com OR tixr.com OR etix.com "
-        "OR livenation.com OR songkick.com OR bandsintown.com)"
-        ")"
-    )
+    title       = (event.get("title") or "Event").replace("\\", "").replace('"', "'")
+    location    = (event.get("location") or "").replace("\\", "").replace('"', "'")
+    description = (event.get("description") or "").replace("\\", "").replace('"', "'")[:500]
+    start_str   = event.get("start")
+    if not start_str:
+        return False
     try:
-        result = _google_api(account_id, "GET",
-                              "https://gmail.googleapis.com/gmail/v1/users/me/messages",
-                              params={"q": query, "maxResults": "75"})
-        messages = result.get("messages", [])
-        slog(f"[email] account {account_id}: {len(messages)} candidate emails")
-        for msg_ref in messages:
-            msg_id = msg_ref["id"]
-            existing = db.execute(
-                "SELECT id, status FROM email_events WHERE account_id=? AND gmail_message_id=?",
-                (account_id, msg_id),
-            ).fetchone()
-            if existing and existing["status"] in ("synced", "dismissed", "not_event"):
-                continue
-            try:
-                msg = _google_api(
-                    account_id, "GET",
-                    f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg_id}",
-                    params={"format": "full"},
-                )
-                hdrs = {h["name"].lower(): h["value"]
-                        for h in msg.get("payload", {}).get("headers", [])}
-                subject   = hdrs.get("subject", "(no subject)")
-                sender    = hdrs.get("from", "")
-                date_str  = hdrs.get("date", "")
-                thread_id = msg.get("threadId")
-                body_text = _email_get_text(msg.get("payload", {}))
-                if existing:
-                    continue   # pending record already exists, skip re-extraction
-                event_data = _ai_extract_event(subject, sender, date_str, body_text)
-                now = int(time.time())
-                ev_id = str(uuid.uuid4())
-                if event_data:
-                    db.execute(
-                        "INSERT OR IGNORE INTO email_events "
-                        "(id, account_id, gmail_message_id, gmail_thread_id, email_subject, email_from, "
-                        "email_date, event_title, event_start, event_end, event_location, "
-                        "event_description, status, raw_extract, created) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (ev_id, account_id, msg_id, thread_id, subject, sender, date_str,
-                         event_data.get("title"), event_data.get("start"), event_data.get("end"),
-                         event_data.get("location"), event_data.get("description"),
-                         "pending", json.dumps(event_data), now),
-                    )
-                    db.commit()
-                    slog(f"[email] detected event: {event_data.get('title')}")
-                    cal_ev_id = _gcal_create_event(account_id, event_data)
-                    if cal_ev_id:
-                        db.execute(
-                            "UPDATE email_events SET status='synced', calendar_event_id=? WHERE id=?",
-                            (cal_ev_id, ev_id),
-                        )
-                        db.commit()
-                        slog(f"[email] → calendar: {event_data.get('title')}")
-                else:
-                    db.execute(
-                        "INSERT OR IGNORE INTO email_events "
-                        "(id, account_id, gmail_message_id, gmail_thread_id, email_subject, email_from, "
-                        "email_date, status, created) VALUES (?,?,?,?,?,?,?,?,?)",
-                        (ev_id, account_id, msg_id, thread_id, subject, sender, date_str, "not_event", now),
-                    )
-                    db.commit()
-            except Exception as e:
-                slog(f"[email] message {msg_id} error: {e}")
-        db.execute("UPDATE email_accounts SET last_synced=? WHERE id=?",
-                   (int(time.time()), account_id))
-        db.commit()
+        if "T" in str(start_str):
+            start_dt = datetime.fromisoformat(start_str)
+        else:
+            start_dt = datetime.strptime(str(start_str)[:10], "%Y-%m-%d").replace(hour=0, minute=0)
+    except Exception:
+        return False
+    end_str = event.get("end")
+    try:
+        if end_str and "T" in str(end_str):
+            end_dt = datetime.fromisoformat(end_str)
+        elif end_str:
+            end_dt = datetime.strptime(str(end_str)[:10], "%Y-%m-%d").replace(hour=23, minute=59)
+        else:
+            end_dt = start_dt + timedelta(hours=2) if "T" in str(start_str) else start_dt.replace(hour=23, minute=59)
+    except Exception:
+        end_dt = start_dt + timedelta(hours=2)
+    all_day = "T" not in str(start_str)
+    if _EMAIL_CALENDAR_NAME:
+        cal_selector = f'first calendar whose name is "{_EMAIL_CALENDAR_NAME}"'
+    else:
+        cal_selector = "first calendar whose writable is true"
+    allday_prop = ", allday event:true" if all_day else ""
+    script = f"""
+tell application "Calendar"
+    set targetCal to {cal_selector}
+    set startD to current date
+    set year of startD to {start_dt.year}
+    set month of startD to {start_dt.month}
+    set day of startD to {start_dt.day}
+    set hours of startD to {start_dt.hour}
+    set minutes of startD to {start_dt.minute}
+    set seconds of startD to 0
+    set endD to current date
+    set year of endD to {end_dt.year}
+    set month of endD to {end_dt.month}
+    set day of endD to {end_dt.day}
+    set hours of endD to {end_dt.hour}
+    set minutes of endD to {end_dt.minute}
+    set seconds of endD to 0
+    tell targetCal
+        make new event with properties {{summary:"{title}", start date:startD, end date:endD, location:"{location}", description:"{description}"{allday_prop}}}
+    end tell
+end tell
+return "ok"
+"""
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0 and "ok" in result.stdout:
+            return True
+        slog(f"[email] Calendar.app error: {result.stderr[:300]}")
+        return False
     except Exception as e:
-        slog(f"[email] sync error account {account_id}: {e}")
+        slog(f"[email] cal create error: {e}")
+        return False
+
+
+def _email_sync() -> None:
+    """Read Mail.app → AI extract → Calendar.app. No accounts to manage."""
+    db = get_db()
+    messages = _mail_fetch_messages()
+    for msg in messages:
+        # Use message-id as dedup key; fall back to subject+date hash
+        msg_id = msg["msg_id"] or f"{msg['subject']}|{msg['date']}"
+        existing = db.execute(
+            "SELECT id, status FROM email_events WHERE gmail_message_id=?", (msg_id,)
+        ).fetchone()
+        if existing and existing["status"] in ("synced", "dismissed", "not_event"):
+            continue
+        if existing:
+            continue  # pending — don't re-extract
+        event_data = _ai_extract_event(msg["subject"], msg["sender"], msg["date"], msg["body"])
+        now   = int(time.time())
+        ev_id = str(uuid.uuid4())
+        if event_data:
+            db.execute(
+                "INSERT OR IGNORE INTO email_events "
+                "(id, account_id, gmail_message_id, email_subject, email_from, email_date, "
+                "event_title, event_start, event_end, event_location, event_description, "
+                "status, raw_extract, created) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (ev_id, msg["account"], msg_id, msg["subject"], msg["sender"], msg["date"],
+                 event_data.get("title"), event_data.get("start"), event_data.get("end"),
+                 event_data.get("location"), event_data.get("description"),
+                 "pending", json.dumps(event_data), now),
+            )
+            db.commit()
+            slog(f"[email] detected: {event_data.get('title')}")
+            if _cal_create_event(event_data):
+                db.execute(
+                    "UPDATE email_events SET status='synced', calendar_event_id='applescript' WHERE id=?",
+                    (ev_id,),
+                )
+                db.commit()
+                slog(f"[email] \u2192 Calendar.app: {event_data.get('title')}")
+        else:
+            db.execute(
+                "INSERT OR IGNORE INTO email_events "
+                "(id, account_id, gmail_message_id, email_subject, email_from, email_date, "
+                "status, created) VALUES (?,?,?,?,?,?,?,?)",
+                (ev_id, msg["account"], msg_id, msg["subject"], msg["sender"], msg["date"],
+                 "not_event", now),
+            )
+            db.commit()
 
 
 def _email_sync_loop() -> None:
-    """Background thread: sync all enabled Gmail accounts on schedule."""
+    """Background thread: sync Mail.app → Calendar.app on schedule."""
     time.sleep(20)  # let server fully start
     while True:
         try:
-            if _GOOGLE_CLIENT_ID and _GOOGLE_CLIENT_SECRET:
-                with _email_sync_lock:
-                    accounts = get_db().execute(
-                        "SELECT id FROM email_accounts WHERE enabled=1"
-                    ).fetchall()
-                for acc in accounts:
-                    try:
-                        _email_sync_account(acc["id"])
-                    except Exception as e:
-                        slog(f"[email] account {acc['id']} error: {e}")
+            with _email_sync_lock:
+                _email_sync()
         except Exception as e:
             slog(f"[email] sync loop error: {e}")
         time.sleep(_EMAIL_SYNC_INTERVAL)
@@ -4807,18 +4762,12 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <div style="padding:10px 12px 6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
     <span style="font-weight:600;font-size:0.85rem;color:var(--text);">Email Events</span>
     <div style="flex:1;"></div>
+    <span id="email-last-sync" style="font-size:0.72rem;color:var(--dim);"></span>
     <button class="btn" id="email-sync-btn" onclick="_emailSync()" style="font-size:0.78rem;padding:4px 10px;">&#x21BB; Sync Now</button>
-    <a id="email-connect-btn" href="/api/email/connect" class="btn" style="font-size:0.78rem;padding:4px 10px;text-decoration:none;">+ Connect Gmail</a>
   </div>
-  <div id="email-setup-notice" style="display:none;margin:8px 12px;padding:10px 12px;background:var(--card);border:1px solid var(--border);border-radius:6px;font-size:0.8rem;color:var(--dim);line-height:1.5;">
-    <strong style="color:var(--text);">Setup required</strong><br>
-    Add to <code>~/.amux/server.env</code>:<br>
-    <code style="color:var(--accent);">AMUX_GOOGLE_CLIENT_ID=...</code><br>
-    <code style="color:var(--accent);">AMUX_GOOGLE_CLIENT_SECRET=...</code><br>
-    <span style="margin-top:6px;display:block;">Create credentials at <strong>console.cloud.google.com</strong> → APIs &amp; Services → Credentials → OAuth 2.0 Client ID (Web application). Enable Gmail API + Google Calendar API. Add redirect URI: <code>https://localhost:8822/api/email/callback</code></span>
-  </div>
-  <div id="email-accounts-section" style="padding:0 12px 6px;">
-    <div id="email-accounts-list"></div>
+  <div style="margin:0 12px 8px;padding:8px 12px;background:var(--card);border:1px solid var(--border);border-radius:6px;font-size:0.78rem;color:var(--dim);line-height:1.6;">
+    Reads all accounts in <strong style="color:var(--text);">Mail.app</strong>, detects event/ticket emails with AI, and adds them to <strong style="color:var(--text);">Calendar.app</strong> (which syncs to Google Calendar automatically). No OAuth setup needed.
+    <span style="display:block;margin-top:4px;">Optional: set <code style="color:var(--accent);">AMUX_CALENDAR_NAME</code> in <code>~/.amux/server.env</code> to target a specific calendar. Default: first writable calendar.</span>
   </div>
   <div style="padding:0 12px 4px;display:flex;align-items:center;gap:8px;">
     <span style="font-size:0.78rem;font-weight:600;color:var(--dim);">Detected Events</span>
@@ -9924,8 +9873,6 @@ function switchView(view) {
   } else {
     if (boardTimer) { clearInterval(boardTimer); boardTimer = null; }
   }
-  // Handle hash navigation (e.g. redirect from OAuth callback)
-  if (view === 'email' && location.hash === '#email') history.replaceState(null, '', '/');
 }
 
 // ── Logs tab ──────────────────────────────────────────────────────────────────
@@ -12804,62 +12751,22 @@ async function pullFromRemote(btn) {
 
 <script>
 // ── Email Events tab ──────────────────────────────────────────────────────────
-let _emailAccounts = [];
-let _emailEvents   = [];
+let _emailEvents = [];
 
 async function _emailLoad() {
-  await Promise.all([_emailFetchAccounts(), _emailFetchEvents()]);
-  _emailRenderAccounts();
-  _emailRender();
-}
-
-async function _emailFetchAccounts() {
-  try {
-    const r = await fetch('/api/email/accounts');
-    if (r.status === 503) {
-      document.getElementById('email-setup-notice').style.display = '';
-      document.getElementById('email-connect-btn').style.display = 'none';
-      document.getElementById('email-sync-btn').style.display = 'none';
-      return;
-    }
-    document.getElementById('email-setup-notice').style.display = 'none';
-    document.getElementById('email-connect-btn').style.display = '';
-    document.getElementById('email-sync-btn').style.display = '';
-    _emailAccounts = await r.json();
-  } catch(e) { console.error('email accounts', e); }
-}
-
-async function _emailFetchEvents() {
-  try {
-    const filter = document.getElementById('email-filter').value;
-    const url = '/api/email/events' + (filter ? '?status=' + filter : '');
-    const r = await fetch(url);
-    _emailEvents = r.ok ? await r.json() : [];
-  } catch(e) { _emailEvents = []; }
-}
-
-function _emailRenderAccounts() {
-  const el = document.getElementById('email-accounts-list');
-  if (!_emailAccounts.length) {
-    el.innerHTML = '<div style="font-size:0.78rem;color:var(--dim);padding:4px 0 8px;">No accounts connected.</div>';
-    return;
-  }
-  el.innerHTML = _emailAccounts.map(a => {
-    const synced = a.last_synced ? new Date(a.last_synced * 1000).toLocaleString() : 'never';
-    return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);">'
-      + '<span style="font-size:0.8rem;color:var(--accent);">\u2709 ' + escHtml(a.email) + '</span>'
-      + '<span style="font-size:0.72rem;color:var(--dim);flex:1;">synced ' + synced + '</span>'
-      + '<button class="btn" onclick="_emailDisconnect(\'' + a.id + '\')" style="font-size:0.7rem;padding:2px 8px;color:var(--red);">Disconnect</button>'
-      + '</div>';
-  }).join('');
+  await _emailRender();
 }
 
 async function _emailRender() {
-  await _emailFetchEvents();
+  try {
+    const filter = document.getElementById('email-filter').value;
+    const r = await fetch('/api/email/events' + (filter ? '?status=' + filter : ''));
+    _emailEvents = r.ok ? await r.json() : [];
+  } catch(e) { _emailEvents = []; }
   const el = document.getElementById('email-events-list');
   const visible = _emailEvents.filter(e => e.status !== 'not_event');
   if (!visible.length) {
-    el.innerHTML = '<div style="color:var(--dim);font-size:0.82rem;text-align:center;padding:32px 0;">No events detected yet. Connect a Gmail account and sync to get started.</div>';
+    el.innerHTML = '<div style="color:var(--dim);font-size:0.82rem;text-align:center;padding:40px 0;">No events detected yet.<br><span style="font-size:0.75rem;">Click \u21BB Sync Now to scan Mail.app for ticket and event emails.</span></div>';
     return;
   }
   el.innerHTML = visible.map(ev => {
@@ -12870,8 +12777,10 @@ async function _emailRender() {
       try {
         const d = new Date(ev.event_start.includes('T') ? ev.event_start : ev.event_start + 'T00:00:00');
         startFmt = d.toLocaleString(undefined, {dateStyle:'medium', timeStyle: ev.event_start.includes('T') ? 'short' : undefined});
-      } catch(e) { startFmt = ev.event_start; }
+      } catch(e2) { startFmt = ev.event_start; }
     }
+    const from = escHtml((ev.email_from || '').replace(/<[^>]+>/g, '').trim());
+    const acct = escHtml(ev.account_id || '');
     return '<div style="background:var(--card);border:1px solid var(--border);border-radius:7px;padding:10px 12px;">'
       + '<div style="display:flex;align-items:flex-start;gap:8px;">'
       + '<div style="flex:1;min-width:0;">'
@@ -12879,11 +12788,11 @@ async function _emailRender() {
       + (startFmt ? '<div style="font-size:0.78rem;color:var(--accent);margin-top:2px;">\uD83D\uDCC5 ' + startFmt + '</div>' : '')
       + (ev.event_location ? '<div style="font-size:0.75rem;color:var(--dim);margin-top:2px;">\uD83D\uDCCD ' + escHtml(ev.event_location) + '</div>' : '')
       + (ev.event_description ? '<div style="font-size:0.75rem;color:var(--dim);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(ev.event_description) + '</div>' : '')
-      + '<div style="font-size:0.7rem;color:var(--dim);margin-top:4px;">' + escHtml(ev.account_email || '') + ' &bull; ' + escHtml((ev.email_from || '').replace(/<[^>]+>/, '').trim()) + '</div>'
+      + '<div style="font-size:0.7rem;color:var(--dim);margin-top:4px;">' + (acct ? acct + ' \u2022 ' : '') + from + '</div>'
       + '</div>'
       + '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;">'
       + '<span style="font-size:0.72rem;font-weight:600;color:' + statusColor + ';">' + statusLabel + '</span>'
-      + (ev.status === 'pending' ? '<button class="btn" onclick="_emailPush(\'' + ev.id + '\')" style="font-size:0.7rem;padding:2px 8px;">\uD83D\uDCC5 Push</button>' : '')
+      + (ev.status === 'pending' ? '<button class="btn" onclick="_emailPush(\'' + ev.id + '\')" style="font-size:0.7rem;padding:2px 8px;">\uD83D\uDCC5 Add</button>' : '')
       + (ev.status !== 'dismissed' ? '<button class="btn" onclick="_emailDismiss(\'' + ev.id + '\')" style="font-size:0.7rem;padding:2px 8px;color:var(--dim);">\u2715</button>' : '')
       + '</div></div></div>';
   }).join('');
@@ -12895,30 +12804,27 @@ async function _emailSync() {
   btn.disabled = true;
   try {
     await fetch('/api/email/sync', {method:'POST'});
-    setTimeout(() => { btn.textContent = '\u21BB Sync Now'; btn.disabled = false; _emailRender(); }, 3000);
+    // Sync runs in background (Mail.app can take a while); poll after a delay
+    setTimeout(async () => {
+      btn.textContent = '\u21BB Sync Now'; btn.disabled = false;
+      await _emailRender();
+      const ts = document.getElementById('email-last-sync');
+      if (ts) ts.textContent = 'synced ' + new Date().toLocaleTimeString();
+    }, 5000);
   } catch(e) { btn.textContent = '\u21BB Sync Now'; btn.disabled = false; }
-}
-
-async function _emailDisconnect(id) {
-  if (!confirm('Disconnect this Gmail account? Detected events will be removed.')) return;
-  await fetch('/api/email/accounts/' + id, {method:'DELETE'});
-  _emailLoad();
 }
 
 async function _emailPush(id) {
   const r = await fetch('/api/email/events/' + id, {method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({push: true})});
   const d = await r.json();
   if (d.ok) _emailRender();
-  else alert('Failed: ' + (d.error || 'unknown'));
+  else alert('Calendar.app error: ' + (d.error || 'unknown'));
 }
 
 async function _emailDismiss(id) {
   await fetch('/api/email/events/' + id, {method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({status:'dismissed'})});
   _emailRender();
 }
-
-// Auto-open email tab if redirected from OAuth callback
-if (location.hash === '#email') switchView('email');
 </script>
 
 <script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
@@ -14988,168 +14894,31 @@ class CCHandler(BaseHTTPRequestHandler):
                 return self._json({"error": "nothing to update"}, 400)
             return self._json({"error": "not found"}, 404)
 
-        # ── /api/email/* — Gmail OAuth + event extraction + Calendar sync ────────
+        # ── /api/email/* — Mail.app + Calendar.app via AppleScript (no OAuth) ────
         if path.startswith("/api/email"):
-            if not _GOOGLE_CLIENT_ID or not _GOOGLE_CLIENT_SECRET:
-                return self._json(
-                    {"error": "Set AMUX_GOOGLE_CLIENT_ID and AMUX_GOOGLE_CLIENT_SECRET in ~/.amux/server.env"},
-                    503,
-                )
-
-            # GET /api/email/connect — start OAuth flow
-            if method == "GET" and path == "/api/email/connect":
-                import urllib.parse as _up
-                state = str(uuid.uuid4())
-                _email_oauth_states[state] = int(time.time()) + 600
-                params = {
-                    "client_id": _GOOGLE_CLIENT_ID,
-                    "redirect_uri": _GOOGLE_REDIRECT_URI,
-                    "response_type": "code",
-                    "scope": " ".join(_GOOGLE_SCOPES),
-                    "access_type": "offline",
-                    "prompt": "consent select_account",
-                    "state": state,
-                }
-                redir = "https://accounts.google.com/o/oauth2/v2/auth?" + _up.urlencode(params)
-                self.send_response(302)
-                self._cors()
-                self.send_header("Location", redir)
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-                return
-
-            # GET /api/email/callback — handle OAuth redirect
-            if method == "GET" and path == "/api/email/callback":
-                import urllib.parse as _up, urllib.request as _ur
-                code  = qs.get("code",  [""])[0]
-                state = qs.get("state", [""])[0]
-                error = qs.get("error", [""])[0]
-                if error or not code:
-                    body_html = (f"<html><body style='font-family:system-ui;padding:40px'>"
-                                 f"<b>OAuth error:</b> {error or 'no code returned'}<br>"
-                                 f"<a href='/'>Back to dashboard</a></body></html>").encode()
-                    self.send_response(400)
-                    self._cors()
-                    self.send_header("Content-Type", "text/html")
-                    self.send_header("Content-Length", str(len(body_html)))
-                    self.end_headers()
-                    self.wfile.write(body_html)
-                    return
-                # Exchange code for tokens
-                token_data = _up.urlencode({
-                    "code": code,
-                    "client_id": _GOOGLE_CLIENT_ID,
-                    "client_secret": _GOOGLE_CLIENT_SECRET,
-                    "redirect_uri": _GOOGLE_REDIRECT_URI,
-                    "grant_type": "authorization_code",
-                }).encode()
-                try:
-                    req = _ur.Request(
-                        "https://oauth2.googleapis.com/token", data=token_data,
-                        headers={"Content-Type": "application/x-www-form-urlencoded"},
-                    )
-                    with _ur.urlopen(req, timeout=15) as r:
-                        tokens = json.loads(r.read())
-                except Exception as e:
-                    body_html = f"<html><body>Token exchange failed: {e}<br><a href='/'>Back</a></body></html>".encode()
-                    self.send_response(500)
-                    self._cors()
-                    self.send_header("Content-Type", "text/html")
-                    self.send_header("Content-Length", str(len(body_html)))
-                    self.end_headers()
-                    self.wfile.write(body_html)
-                    return
-                # Get user email
-                try:
-                    ui_req = _ur.Request(
-                        "https://www.googleapis.com/oauth2/v2/userinfo",
-                        headers={"Authorization": f"Bearer {tokens['access_token']}"},
-                    )
-                    with _ur.urlopen(ui_req, timeout=10) as r:
-                        user_info = json.loads(r.read())
-                    email = user_info.get("email", "unknown")
-                except Exception:
-                    email = "unknown"
-                db = get_db()
-                existing = db.execute(
-                    "SELECT id FROM email_accounts WHERE email=?", (email,)
-                ).fetchone()
-                acc_id   = existing["id"] if existing else str(uuid.uuid4())
-                expiry   = int(time.time()) + tokens.get("expires_in", 3600)
-                if existing:
-                    if "refresh_token" in tokens:
-                        db.execute(
-                            "UPDATE email_accounts SET access_token=?, refresh_token=?, token_expiry=?, enabled=1 WHERE id=?",
-                            (tokens["access_token"], tokens["refresh_token"], expiry, acc_id),
-                        )
-                    else:
-                        db.execute(
-                            "UPDATE email_accounts SET access_token=?, token_expiry=?, enabled=1 WHERE id=?",
-                            (tokens["access_token"], expiry, acc_id),
-                        )
-                else:
-                    db.execute(
-                        "INSERT INTO email_accounts (id, email, access_token, refresh_token, token_expiry, created) VALUES (?,?,?,?,?,?)",
-                        (acc_id, email, tokens.get("access_token"), tokens.get("refresh_token"), expiry, int(time.time())),
-                    )
-                db.commit()
-                slog(f"[email] connected account: {email}")
-                threading.Thread(target=_email_sync_account, args=(acc_id,), daemon=True).start()
-                self.send_response(302)
-                self._cors()
-                self.send_header("Location", "/#email")
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-                return
-
-            # GET /api/email/accounts
-            if method == "GET" and path == "/api/email/accounts":
-                rows = get_db().execute(
-                    "SELECT id, email, calendar_id, last_synced, enabled FROM email_accounts ORDER BY created"
-                ).fetchall()
-                return self._json([dict(r) for r in rows])
-
-            # DELETE /api/email/accounts/<id>
-            m2 = re.match(r"^/api/email/accounts/([a-f0-9-]+)$", path)
-            if m2 and method == "DELETE":
-                aid = m2.group(1)
-                get_db().execute("DELETE FROM email_events  WHERE account_id=?", (aid,))
-                get_db().execute("DELETE FROM email_accounts WHERE id=?", (aid,))
-                get_db().commit()
-                return self._json({"ok": True})
 
             # GET /api/email/events
             if method == "GET" and path == "/api/email/events":
                 status_f = qs.get("status", [""])[0]
                 if status_f:
                     rows = get_db().execute(
-                        "SELECT e.*, a.email as account_email FROM email_events e "
-                        "JOIN email_accounts a ON e.account_id=a.id "
-                        "WHERE e.status=? ORDER BY e.event_start, e.created DESC LIMIT 200",
+                        "SELECT * FROM email_events WHERE status=? "
+                        "ORDER BY event_start, created DESC LIMIT 200",
                         (status_f,),
                     ).fetchall()
                 else:
                     rows = get_db().execute(
-                        "SELECT e.*, a.email as account_email FROM email_events e "
-                        "JOIN email_accounts a ON e.account_id=a.id "
-                        "WHERE e.status != 'not_event' ORDER BY e.event_start, e.created DESC LIMIT 200",
+                        "SELECT * FROM email_events WHERE status != 'not_event' "
+                        "ORDER BY event_start, created DESC LIMIT 200",
                     ).fetchall()
                 return self._json([dict(r) for r in rows])
 
-            # POST /api/email/sync — trigger manual sync
+            # POST /api/email/sync — trigger manual sync in background
             if method == "POST" and path == "/api/email/sync":
-                accounts = get_db().execute(
-                    "SELECT id FROM email_accounts WHERE enabled=1"
-                ).fetchall()
-                if not accounts:
-                    return self._json({"error": "no accounts connected"}, 400)
-                for acc in accounts:
-                    threading.Thread(
-                        target=_email_sync_account, args=(acc["id"],), daemon=True
-                    ).start()
-                return self._json({"ok": True, "syncing": len(accounts)})
+                threading.Thread(target=_email_sync, daemon=True).start()
+                return self._json({"ok": True})
 
-            # PATCH /api/email/events/<id>
+            # PATCH /api/email/events/<id> — dismiss or manually push to calendar
             m2 = re.match(r"^/api/email/events/([a-f0-9-]+)$", path)
             if m2 and method == "PATCH":
                 ev_id = m2.group(1)
@@ -15173,16 +14942,23 @@ class CCHandler(BaseHTTPRequestHandler):
                         "location":    ev["event_location"],
                         "description": ev["event_description"],
                     }
-                    cal_id = _gcal_create_event(ev["account_id"], event_data)
-                    if cal_id:
+                    ok = _cal_create_event(event_data)
+                    if ok:
                         get_db().execute(
-                            "UPDATE email_events SET status='synced', calendar_event_id=? WHERE id=?",
-                            (cal_id, ev_id),
+                            "UPDATE email_events SET status='synced', calendar_event_id='applescript' WHERE id=?",
+                            (ev_id,),
                         )
                         get_db().commit()
-                        return self._json({"ok": True, "calendar_event_id": cal_id})
-                    return self._json({"error": "calendar event creation failed"}, 500)
+                        return self._json({"ok": True})
+                    return self._json({"error": "Calendar.app event creation failed"}, 500)
                 return self._json({"error": "nothing to update"}, 400)
+
+            # DELETE /api/email/events/<id> — hard delete
+            if m2 and method == "DELETE":
+                ev_id = m2.group(1)
+                get_db().execute("DELETE FROM email_events WHERE id=?", (ev_id,))
+                get_db().commit()
+                return self._json({"ok": True})
 
             return self._json({"error": "not found"}, 404)
 
