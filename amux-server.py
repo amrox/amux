@@ -2835,10 +2835,10 @@ return output
         return messages
     except subprocess.TimeoutExpired:
         slog("[email] Mail.app AppleScript timed out (>120s)")
-        return []
+        return None  # None = timeout/failure; [] = success with no matches
     except Exception as e:
         slog(f"[email] mail fetch error: {e}")
-        return []
+        return None
 
 
 def _ai_extract_event(subject: str, sender: str, date_str: str, body: str) -> dict | None:
@@ -2957,6 +2957,8 @@ def _email_sync() -> None:
         lookback_seconds = elapsed + 300  # add 5 min buffer to avoid gaps
     slog(f"[email] syncing lookback={lookback_seconds//60}min")
     messages = _mail_fetch_messages(lookback_seconds)
+    if messages is None:
+        return  # timed out — don't update last_synced so next run retries with same window
     for msg in messages:
         # Use message-id as dedup key; fall back to subject+date hash
         msg_id = msg["msg_id"] or f"{msg['subject']}|{msg['date']}"
@@ -14599,7 +14601,10 @@ class CCHandler(BaseHTTPRequestHandler):
 
             # POST /api/email/sync — trigger manual sync in background
             if method == "POST" and path == "/api/email/sync":
-                threading.Thread(target=_email_sync, daemon=True).start()
+                def _locked_sync():
+                    with _email_sync_lock:
+                        _email_sync()
+                threading.Thread(target=_locked_sync, daemon=True).start()
                 return self._json({"ok": True})
 
             # PATCH /api/email/events/<id> — dismiss or manually push to calendar
