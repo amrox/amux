@@ -3155,6 +3155,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   }
   /* Sortable drag feedback */
   body.session-dragging, body.session-dragging * { user-select: none !important; -webkit-user-select: none !important; cursor: grabbing !important; }
+  body.session-dragging .card { transition: none !important; }
   .sortable-ghost { opacity: 0.35; background: rgba(88,166,255,0.07) !important; border: 2px dashed var(--accent) !important; border-radius: 10px; }
   .sortable-chosen { opacity: 0.7; box-shadow: none; }
   .sortable-drag { opacity: 0.96; box-shadow: 0 14px 36px rgba(0,0,0,0.45); transform: rotate(1deg) scale(1.02); border-radius: 10px; }
@@ -4301,11 +4302,13 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .board-card {
     background: var(--card); border: 1px solid var(--border);
     border-radius: 8px; padding: 10px 12px;
-    cursor: pointer; transition: border-color 0.2s, box-shadow 0.2s, transform 0.35s cubic-bezier(.4,0,.2,1), opacity 0.3s;
+    cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s;
     -webkit-tap-highlight-color: transparent;
-    will-change: transform, opacity;
+    will-change: transform;
     position: relative;
   }
+  /* Kill all transitions while dragging so Sortable's JS animation is the sole driver */
+  body.board-dragging .board-card { transition: none !important; }
   .board-card:active { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(88,166,255,0.2); }
   .board-drag-handle {
     position: absolute; top: 6px; right: 6px;
@@ -9551,7 +9554,8 @@ function initSortable() {
   if (!cards) return;
   _sortable = Sortable.create(cards, {
     handle: '.card-drag-handle',
-    animation: 180,
+    animation: 120,
+    easing: 'cubic-bezier(0.2, 0, 0, 1)',
     ghostClass: 'sortable-ghost',
     chosenClass: 'sortable-chosen',
     dragClass: 'sortable-drag',
@@ -10642,7 +10646,8 @@ function renderBoard() {
     container.querySelectorAll('.board-col').forEach(colEl => {
       _boardSortables.push(Sortable.create(colEl, {
         group: 'board',
-        animation: 180,
+        animation: 120,
+        easing: 'cubic-bezier(0.2, 0, 0, 1)',
         handle: '.board-drag-handle',
         ghostClass: 'board-sortable-ghost',
         chosenClass: 'board-sortable-chosen',
