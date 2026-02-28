@@ -395,6 +395,98 @@
       opacity: 0.7;
     }
     #demo-lightbox-close:hover { opacity: 1; }
+
+    /* ── Cloud CTA ───────────────────────────────────────── */
+    .cloud-cta {
+      margin-bottom: 2.5rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.4rem 1.4rem 1.3rem;
+      background: var(--code-bg);
+    }
+
+    .cloud-cta-header {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .cloud-badge {
+      font-size: 0.65rem;
+      font-weight: 600;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      padding: 2px 7px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+
+    .cloud-cta-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+    }
+
+    .cloud-cta-sub {
+      font-size: 0.84rem;
+      color: var(--muted);
+      margin-bottom: 1rem;
+      line-height: 1.5;
+    }
+
+    .cloud-form {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .cloud-form input[type="email"] {
+      flex: 1;
+      min-width: 0;
+      padding: 0.38rem 0.75rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--fg);
+      font-size: 0.875rem;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    .cloud-form input[type="email"]:focus { border-color: var(--accent); }
+    .cloud-form input[type="email"]::placeholder { color: var(--muted); }
+
+    .cloud-form button {
+      padding: 0.38rem 1rem;
+      border-radius: 6px;
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: #0a0a0a;
+      font-size: 0.875rem;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: opacity 0.12s;
+    }
+
+    .cloud-form button:hover { opacity: 0.85; }
+    .cloud-form button:disabled { opacity: 0.45; cursor: default; }
+
+    .cloud-thanks {
+      display: none;
+      font-size: 0.84rem;
+      color: var(--accent);
+      font-weight: 500;
+    }
+
+    .cloud-thanks.show { display: block; }
+    .cloud-form.hide { display: none; }
+
+    @media (max-width: 400px) {
+      .cloud-form { flex-direction: column; }
+    }
   </style>
 </head>
 <body>
@@ -560,6 +652,19 @@
 
   <hr>
 
+  <div class="cloud-cta">
+    <div class="cloud-cta-header">
+      <span class="cloud-cta-title">amux cloud</span>
+      <span class="cloud-badge">Coming soon</span>
+    </div>
+    <p class="cloud-cta-sub">Hosted amux — persistent sessions, isolated environment, full feature parity. Free tier available at launch.</p>
+    <div class="cloud-form" id="cloud-form">
+      <input type="email" id="cloud-email" placeholder="you@example.com" autocomplete="email">
+      <button onclick="joinCloud()">Join waitlist</button>
+    </div>
+    <div class="cloud-thanks" id="cloud-thanks">✓ You're on the list.</div>
+  </div>
+
   <p class="section-label">Resources</p>
   <div class="link-grid">
     <div class="link-grid-group">
@@ -661,6 +766,39 @@
   });
   function closeLightbox() { lb.classList.remove('open'); vid.pause(); }
   document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeLightbox(); });
+
+  // Cloud waitlist
+  document.getElementById('cloud-email').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') joinCloud();
+  });
+  function joinCloud() {
+    var email = document.getElementById('cloud-email').value.trim();
+    if (!email) return document.getElementById('cloud-email').focus();
+    var form = document.getElementById('cloud-form');
+    var thanks = document.getElementById('cloud-thanks');
+    var btn = form.querySelector('button');
+    btn.disabled = true;
+    btn.textContent = '...';
+    fetch('https://formspree.io/f/xgolboon', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ email: email })
+    }).then(function(r) { return r.json().then(function(d) { return { ok: r.ok, d: d }; }); })
+      .then(function(res) {
+        if (res.ok) {
+          form.classList.add('hide');
+          thanks.classList.add('show');
+        } else {
+          btn.disabled = false;
+          btn.textContent = 'Join waitlist';
+          alert((res.d.errors || [{}])[0].message || 'Something went wrong.');
+        }
+      }).catch(function() {
+        btn.disabled = false;
+        btn.textContent = 'Join waitlist';
+        alert('Could not connect. Try again shortly.');
+      });
+  }
 
   // Theme toggle
   var root = document.documentElement;
