@@ -4918,7 +4918,14 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <select id="rb-profile" onchange="_rbSwitchProfile(this.value)" style="font-size:0.72rem;padding:2px 6px;background:var(--card-bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;">
       <option value="default">default</option>
     </select>
-    <button class="btn" onclick="_rbNewProfile()" style="font-size:0.6rem;padding:1px 6px;">+ New</button>
+    <button class="btn" id="rb-new-btn" onclick="_rbShowNewProfile()" style="font-size:0.6rem;padding:1px 6px;">+ New</button>
+    <span id="rb-new-profile-form" style="display:none;align-items:center;gap:4px;">
+      <input id="rb-new-profile-name" type="text" placeholder="profile name" autocomplete="off"
+        style="font-size:0.7rem;padding:2px 6px;width:110px;background:var(--card-bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;"
+        onkeydown="if(event.key==='Enter')_rbCreateProfile();if(event.key==='Escape')_rbHideNewProfile()">
+      <button class="btn primary" onclick="_rbCreateProfile()" style="font-size:0.6rem;padding:1px 7px;">Create</button>
+      <button class="btn" onclick="_rbHideNewProfile()" style="font-size:0.6rem;padding:1px 6px;">&#x2715;</button>
+    </span>
     <button class="btn" id="rb-del-profile" onclick="_rbDeleteProfile()" style="font-size:0.6rem;padding:1px 6px;color:var(--red);display:none;" title="Delete profile">&#x2715;</button>
     <button class="btn" onclick="_rbLogin()" style="font-size:0.6rem;padding:1px 8px;" title="Open headed browser to log in and save credentials">&#x1F511; Login</button>
     <button class="btn" id="rb-rec-btn" onclick="_rbToggleRecord()" style="font-size:0.6rem;padding:1px 8px;" title="Toggle video recording (takes effect on next launch)">&#x23FA; Rec</button>
@@ -8207,10 +8214,24 @@ async function _rbLoadProfiles() {
   } catch(e) {}
 }
 
-async function _rbNewProfile() {
-  const name = prompt('Profile name:');
-  if (!name || !name.trim()) return;
-  const clean = name.trim().replace(/[^a-zA-Z0-9_-]/g, '-');
+function _rbShowNewProfile() {
+  document.getElementById('rb-new-btn').style.display = 'none';
+  const form = document.getElementById('rb-new-profile-form');
+  form.style.display = 'flex';
+  document.getElementById('rb-new-profile-name').value = '';
+  document.getElementById('rb-new-profile-name').focus();
+}
+
+function _rbHideNewProfile() {
+  document.getElementById('rb-new-btn').style.display = '';
+  document.getElementById('rb-new-profile-form').style.display = 'none';
+}
+
+async function _rbCreateProfile() {
+  const inp = document.getElementById('rb-new-profile-name');
+  const clean = inp.value.trim().replace(/[^a-zA-Z0-9_-]/g, '-');
+  if (!clean || clean === 'default') return;
+  _rbHideNewProfile();
   try {
     const r = await fetch(API + '/api/browser/profiles', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
