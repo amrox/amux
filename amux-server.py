@@ -220,8 +220,8 @@ def _run_browser_agent(task: str, start_url: str = "", max_steps: int = 25):
          "input_schema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}},
         {"name": "key", "description": "Press a keyboard key, e.g. Enter, Tab, Escape, ArrowDown.",
          "input_schema": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]}},
-        {"name": "scroll", "description": "Scroll the page. dy > 0 scrolls down.",
-         "input_schema": {"type": "object", "properties": {"dy": {"type": "number"}}, "required": ["dy"]}},
+        {"name": "scroll", "description": "Scroll the page. dy > 0 scrolls down. Provide x,y to scroll over a specific area (e.g. x=580,y=400 for the email list in Gmail).",
+         "input_schema": {"type": "object", "properties": {"dy": {"type": "number"}, "x": {"type": "number"}, "y": {"type": "number"}}, "required": ["dy"]}},
         {"name": "wait", "description": "Pause for ms milliseconds while content loads (max 5000).",
          "input_schema": {"type": "object", "properties": {"ms": {"type": "number"}}, "required": ["ms"]}},
         {"name": "done", "description": "Task complete — stop the browser and save the recording.",
@@ -289,7 +289,8 @@ def _run_browser_agent(task: str, start_url: str = "", max_steps: int = 25):
                 elif name == "key":
                     r = _rb_send({"action": "key", "key": inp["key"]})
                 elif name == "scroll":
-                    r = _rb_send({"action": "scroll", "dy": inp["dy"]})
+                    r = _rb_send({"action": "scroll", "dy": inp["dy"],
+                                  "x": inp.get("x", 640), "y": inp.get("y", 400)})
                 elif name == "wait":
                     time.sleep(min(float(inp.get("ms", 1000)), 5000) / 1000)
                     r = {"ok": True}
@@ -10432,12 +10433,12 @@ function boardColDragLeave(e) {
   }
 }
 
-async function boardColDrop(e, col) {
+function boardColDrop(e, col) {
   e.preventDefault();
   e.currentTarget.classList.remove('drag-over');
   if (_boardDragId) {
     const item = boardItems.find(i => i.id === _boardDragId);
-    if (item && item.status !== col) await moveBoardItem(_boardDragId, col);
+    if (item && item.status !== col) moveBoardItem(_boardDragId, col);
     _boardDragId = null;
   }
 }
@@ -11088,8 +11089,23 @@ async function deleteBoardItem(id) {
   await apiCall(API + '/api/board/' + id, { method: 'DELETE' });
 }
 
-async function moveBoardItem(id, newStatus) {
-  await updateBoardItem(id, { status: newStatus });
+function moveBoardItem(id, newStatus) {
+  // Optimistic: update in-memory + cache immediately; Sortable already moved the DOM
+  const idx = boardItems.findIndex(i => i.id === id);
+  if (idx >= 0) boardItems[idx] = { ...boardItems[idx], status: newStatus, updated: Math.floor(Date.now() / 1000) };
+  saveBoardCache();
+  // Sync to backend silently — no renderBoard() so the drag stays smooth
+  apiCall(API + '/api/board/' + id, {
+    method: 'PATCH', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ status: newStatus })
+  }).then(r => {
+    if (!r) return;
+    r.json().then(updated => {
+      const i = boardItems.findIndex(b => b.id === id);
+      if (i >= 0) boardItems[i] = updated;
+      saveBoardCache();
+    });
+  });
 }
 
 async function clearDone() {
