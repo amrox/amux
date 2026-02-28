@@ -857,11 +857,15 @@ def _log_event(category: str, action: str, *, session: str = None,
     except Exception:
         pass
     evt = {"ts": ts, "category": category, "action": action,
+           "type": category, "target": detail,  # aliases for _event_log schema compat
            "session": session, "actor": actor, "detail": detail, "level": level}
     with _log_ring_lock:
         _log_ring.append(evt)
         if len(_log_ring) > 100:
             _log_ring[:] = _log_ring[-100:]
+    # Also push to the SSE event log ring so the Logs tab receives it live
+    with _event_log_lock:
+        _event_log.append(evt)
 
 
 def _last_meaningful_user_message(work_dir: str) -> str:
@@ -10190,10 +10194,24 @@ async function fetchLogs() {
     const r = await fetch(API + '/api/logs?' + params.join('&'));
     if (!r.ok) return;
     const d = await r.json();
-    _logsEvents = (d.events || []).map(e => ({
+    const fetched = (d.events || []).map(e => ({
       ...e, type: e.type || e.category, target: e.target || e.detail, ip: e.ip || e.actor,
       status: e.level === 'error' ? 500 : (e.status || 200),
     }));
+    // Merge: keep SSE-accumulated events that are newer than what the API returned,
+    // then append fetched history. Deduplicate by (ts, action, type).
+    const seen = new Set();
+    const merged = [];
+    for (const e of fetched) {
+      const key = `${e.ts}|${e.action}|${e.type||''}`;
+      if (!seen.has(key)) { seen.add(key); merged.push(e); }
+    }
+    for (const e of _logsEvents) {
+      const key = `${e.ts}|${e.action}|${e.type||''}`;
+      if (!seen.has(key)) { seen.add(key); merged.push(e); }
+    }
+    merged.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    _logsEvents = merged.slice(0, 2000);
     renderActivity();
     if (_logsSubtab === 'stats') renderStats();
   } catch(e) {}
@@ -12167,8 +12185,8 @@ function connectSSE() {
           if (activeView === 'board') renderBoard();
           else if (activeView === 'calendar') renderCalendar();
         }
-      } else if (msg.type === 'logs' && activeView === 'logs') {
-        // Merge new events into the local array (newest first display)
+      } else if (msg.type === 'logs') {
+        // Always accumulate log events even when tab is not active
         const newEvts = (msg.payload || []).map(e => ({
           ...e, type: e.type || e.category, target: e.target || e.detail, ip: e.ip || e.actor,
           status: e.level === 'error' ? 500 : (e.status || 200),
@@ -12176,7 +12194,7 @@ function connectSSE() {
         if (newEvts.length) {
           _logsEvents = newEvts.concat(_logsEvents);
           if (_logsEvents.length > 2000) _logsEvents = _logsEvents.slice(0, 2000);
-          renderActivity();
+          if (activeView === 'logs') renderActivity();
         }
       }
     } catch(err) { console.error('SSE parse:', err); }
@@ -13680,20 +13698,45 @@ class CCHandler(BaseHTTPRequestHandler):
             db.commit()
             return self._json({"ok": True, "key": key, "value": value})
 
-        # GET /api/logs — query structured event logs from in-memory ring
+        # GET /api/logs — query structured event logs (SQLite + in-memory ring merged)
         if method == "GET" and path == "/api/logs":
             category = qs.get("category", [""])[0]
-            session = qs.get("session", [""])[0]
+            session_f = qs.get("session", [""])[0]
             limit = min(int(qs.get("limit", ["200"])[0] or 200), 2000)
-            with _event_log_lock:
-                events = list(_event_log)
-            # Filter
+            # Pull from SQLite for persistence across restarts
+            db = get_db()
+            sql = "SELECT ts, category, action, session, actor, detail, level FROM logs"
+            clauses, params = [], []
             if category:
-                events = [e for e in events if e.get("type") == category]
-            if session:
-                events = [e for e in events if e.get("session") == session]
-            events = events[-limit:]
-            events.reverse()  # newest first
+                clauses.append("category=?"); params.append(category)
+            if session_f:
+                clauses.append("session=?"); params.append(session_f)
+            if clauses:
+                sql += " WHERE " + " AND ".join(clauses)
+            sql += " ORDER BY ts DESC LIMIT ?"
+            params.append(limit)
+            rows = db.execute(sql, params).fetchall()
+            db_events = [{
+                "ts": r[0], "category": r[1], "action": r[2], "type": r[1],
+                "session": r[3], "actor": r[4], "detail": r[5], "target": r[5],
+                "level": r[6], "status": 500 if r[6] == "error" else 200,
+            } for r in rows]
+            # Merge with in-memory ring (has HTTP events + very recent structured events)
+            with _event_log_lock:
+                mem_events = list(_event_log)
+            if category:
+                mem_events = [e for e in mem_events if e.get("type") == category or e.get("category") == category]
+            if session_f:
+                mem_events = [e for e in mem_events if e.get("session") == session_f]
+            # Deduplicate by (ts, action, category) — prefer db row
+            seen = {(e["ts"], e["action"], e.get("category", e.get("type", ""))): True for e in db_events}
+            for e in mem_events:
+                key = (e.get("ts", 0), e.get("action", ""), e.get("category", e.get("type", "")))
+                if key not in seen:
+                    seen[key] = True
+                    db_events.append(e)
+            db_events.sort(key=lambda e: e.get("ts", 0), reverse=True)
+            events = db_events[:limit]
             return self._json({"events": events, "count": len(events)})
 
         # GET /api/logs/raw — tail server.log
