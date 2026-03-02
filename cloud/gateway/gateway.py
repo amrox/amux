@@ -65,13 +65,13 @@ _LOGIN_HTML = """<!DOCTYPE html>
       document.getElementById('status').textContent = msg;
     }
 
-    async function exchangeAndRedirect(clerk) {
+    async function exchangeAndRedirect() {
       if (exchanging) return;
       exchanging = true;
       document.getElementById('clerk-root').innerHTML = '<div class="spinner"></div>';
       setStatus('Starting your workspace\u2026');
       try {
-        const token = await clerk.session.getToken();
+        const token = await window.Clerk.session.getToken();
         const res = await fetch('/api/cloud-auth', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -93,18 +93,19 @@ _LOGIN_HTML = """<!DOCTYPE html>
     }
 
     const s = document.createElement('script');
-    s.src = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@4/dist/clerk.browser.js';
+    s.setAttribute('data-clerk-publishable-key', PK);
+    s.crossOrigin = 'anonymous';
+    s.src = 'https://clerk.amux.io/npm/@clerk/clerk-js@4/dist/clerk.browser.js';
     s.onerror = () => setStatus('Failed to load auth library.');
     s.onload = async () => {
-      const clerk = new Clerk(PK);
-      await clerk.load();
-      if (clerk.user) {
-        await exchangeAndRedirect(clerk);
+      await window.Clerk.load();
+      if (window.Clerk.user) {
+        await exchangeAndRedirect();
         return;
       }
-      clerk.mountSignIn(document.getElementById('clerk-root'), { routing: 'hash' });
-      clerk.addListener(({ user }) => {
-        if (user && !exchanging) exchangeAndRedirect(clerk);
+      window.Clerk.mountSignIn(document.getElementById('clerk-root'), { routing: 'hash' });
+      window.Clerk.addListener(({ user }) => {
+        if (user && !exchanging) exchangeAndRedirect();
       });
     };
     document.head.appendChild(s);
