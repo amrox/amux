@@ -143,13 +143,15 @@ def _classify_request(method: str, path: str) -> tuple:
     m = re.match(r"^/api/sessions/([^/]+)/([^/]+)$", path)
     if m:
         sname, sub = m.group(1), m.group(2)
-        if method == "POST"  and sub == "start":  return ("session", "started",      sname, sname)
-        if method == "POST"  and sub == "stop":   return ("session", "stopped",      sname, sname)
-        if method == "POST"  and sub == "send":   return ("session", "message-sent", sname, sname)
-        if method == "PATCH" and sub == "config": return ("session", "configured",   sname, sname)
-        if method == "DELETE":                    return ("session", "deleted",       sname, sname)
-        if method == "POST"  and sub == "memory": return ("memory",  "updated",      sname, sname)
-        if method == "POST"  and sub == "peek":   return ("session", "peeked",       sname, sname)
+        if method == "POST"  and sub == "start":   return ("session", "started",      sname, sname)
+        if method == "POST"  and sub == "stop":    return ("session", "stopped",      sname, sname)
+        if method == "POST"  and sub == "send":    return ("session", "message-sent", sname, sname)
+        if method == "POST"  and sub == "archive": return ("session", "archived",     sname, sname)
+        if method == "POST"  and sub == "wake":    return ("session", "woken",        sname, sname)
+        if method == "PATCH" and sub == "config":  return ("session", "configured",   sname, sname)
+        if method == "DELETE":                     return ("session", "deleted",       sname, sname)
+        if method == "POST"  and sub == "memory":  return ("memory",  "updated",      sname, sname)
+        if method == "POST"  and sub == "peek":    return ("session", "peeked",       sname, sname)
     m = re.match(r"^/api/sessions/([^/]+)$", path)
     if m:
         sname = m.group(1)
@@ -2535,6 +2537,7 @@ def list_sessions() -> list:
             "dir": resolved_dir,
             "desc": cfg.get("CC_DESC", ""),
             "pinned": cfg.get("CC_PINNED", "") == "1",
+            "archived": cfg.get("CC_ARCHIVED", "") == "1",
             "auto_continue": cfg.get("CC_AUTO_CONTINUE") in ("1", "true", "yes"),
             "tags": [t.strip() for t in cfg.get("CC_TAGS", "").split(",") if t.strip()],
             "flags": cfg.get("CC_FLAGS", ""),
@@ -2941,6 +2944,44 @@ def stop_session(name: str) -> tuple[bool, str]:
         return True, "stopped"
     except subprocess.CalledProcessError as e:
         return False, e.stderr.decode(errors="replace")
+
+
+def archive_session(name: str) -> tuple[bool, str]:
+    """Save full tmux scrollback to log, mark CC_ARCHIVED=1, and kill the tmux pane."""
+    f = CC_SESSIONS / f"{name}.env"
+    if not f.exists():
+        return False, f"session '{name}' not found"
+    # Capture full scrollback while still running (50k line history)
+    if is_running(name):
+        try:
+            r = subprocess.run(
+                ["tmux", "capture-pane", "-t", tmux_name(name), "-p", "-S", "-"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if r.stdout.strip():
+                lp = _log_path(name)
+                data = r.stdout.encode("utf-8", errors="replace")
+                if len(data) > MAX_LOG_BYTES:
+                    data = data[-MAX_LOG_BYTES:]
+                lp.write_bytes(data)
+        except Exception:
+            pass
+        stop_session(name)
+    cfg = parse_env_file(f)
+    cfg["CC_ARCHIVED"] = "1"
+    _write_env(f, cfg)
+    return True, "archived"
+
+
+def wake_session(name: str) -> tuple[bool, str]:
+    """Remove CC_ARCHIVED flag and start the session (resumes conversation via --resume)."""
+    f = CC_SESSIONS / f"{name}.env"
+    if not f.exists():
+        return False, f"session '{name}' not found"
+    cfg = parse_env_file(f)
+    cfg.pop("CC_ARCHIVED", None)
+    _write_env(f, cfg)
+    return start_session(name)
 
 
 def _get_send_lock(name: str) -> threading.Lock:
@@ -3535,6 +3576,38 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .card-menu-item .mi { width: 18px; text-align: center; flex-shrink: 0; font-size: 0.85rem; }
   .card-menu-item.danger { color: var(--red); }
   .card-menu-sep { height: 1px; background: var(--border); }
+
+  /* Archived sessions */
+  #archived-section { padding: 0 12px 12px; }
+  .archived-footer {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px; border-radius: 8px; cursor: pointer;
+    border: 1px dashed var(--border); color: var(--dim);
+    font-size: 0.8rem; user-select: none; margin-top: 4px;
+  }
+  .archived-footer:hover { border-color: var(--accent); color: var(--text); }
+  .archived-chevron { font-size: 0.65rem; transition: transform 0.15s; }
+  .archived-chevron.open { transform: rotate(90deg); }
+  .archived-body { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+  .archived-card {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--card); font-size: 0.8rem;
+  }
+  .archived-card-name { font-weight: 600; color: var(--dim); flex-shrink: 0; min-width: 80px; }
+  .archived-card-meta { color: var(--dim); font-size: 0.72rem; flex-shrink: 0; }
+  .archived-card-preview { flex: 1; color: var(--dim); font-size: 0.73rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .archived-card-actions { display: flex; gap: 4px; flex-shrink: 0; }
+  .archived-wake-btn {
+    padding: 3px 10px; border-radius: 5px; font-size: 0.75rem; border: 1px solid var(--accent);
+    color: var(--accent); background: transparent; cursor: pointer; white-space: nowrap;
+  }
+  .archived-wake-btn:hover { background: var(--accent); color: #000; }
+  .archived-del-btn {
+    padding: 3px 7px; border-radius: 5px; font-size: 0.75rem; border: 1px solid var(--border);
+    color: var(--dim); background: transparent; cursor: pointer;
+  }
+  .archived-del-btn:hover { border-color: var(--red); color: var(--red); }
 
   /* Edit modal */
   .edit-overlay {
@@ -5114,6 +5187,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <div id="offline-ops" class="offline-queue-ops"></div>
 </div>
 <div id="cards" class="cards"></div>
+<div id="archived-section"></div>
 </div>
 <div id="board-view" style="display:none;">
   <div class="board-toolbar">
@@ -5851,6 +5925,7 @@ function toggleTheme(checked) {
 // ═══════ STATE & GLOBALS ═══════
 const API = '';
 let sessions = [];
+let archivedExpanded = false;
 let gitInfo = {};  // {sessionName: {branch, repo, _conflict}}
 let _initialLoad = true;   // true until first data arrives from server
 let _lastDataTime = null;  // timestamp of last successful data
@@ -6432,13 +6507,15 @@ function render() {
   } else {
     tagEl.innerHTML = '';
   }
-  if (!sessions.length && !drafts.length) {
+  const _nonArchivedCount = sessions.filter(s => !s.archived).length;
+  if (!_nonArchivedCount && !drafts.length) {
     if (_initialLoad) {
       el.innerHTML = '<div class="empty"><span class="loading-spinner"></span>Connecting to server…</div>';
     } else {
       el.innerHTML = '<div class="empty">No sessions yet.<br>Tap <strong>+</strong> to create one.' +
         (!online ? '<br><span style="color:var(--yellow)">You\'re offline — sessions created now will sync when connected.</span>' : '') + '</div>';
     }
+    _renderArchivedSection();
     if (focusedId) { const f = document.getElementById(focusedId); if (f) f.focus({ preventScroll: true }); }
     return;
   }
@@ -6461,8 +6538,8 @@ function render() {
     </div>`;
   }).join('');
 
-  // Filter by tag
-  let list = activeTag ? sessions.filter(s => (s.tags || []).includes(activeTag)) : sessions;
+  // Filter by tag (exclude archived from main view)
+  let list = (activeTag ? sessions.filter(s => (s.tags || []).includes(activeTag)) : sessions).filter(s => !s.archived);
   // Filter by search query
   const q = searchQuery.toLowerCase().trim();
   const filtered = q ? list.filter(s =>
@@ -6474,6 +6551,7 @@ function render() {
   ) : list;
   if ((q || activeTag) && !filtered.length) {
     el.innerHTML = '<div class="empty">No matching sessions.</div>';
+    _renderArchivedSection();
     if (focusedId) { const f = document.getElementById(focusedId); if (f) f.focus({ preventScroll: true }); }
     return;
   }
@@ -6515,6 +6593,7 @@ function render() {
           <div class="card-menu-item" onclick="event.stopPropagation();duplicateSession('${s.name}')"><span class="mi">&#x2398;</span> Duplicate</div>
           ${s.running ? `<div class="card-menu-item" onclick="event.stopPropagation();cloneSession('${s.name}')"><span class="mi">&#x1F504;</span> Clone &amp; continue</div>` : ''}
           ${!s.running ? `<div class="card-menu-item" onclick="event.stopPropagation();newConversation('${s.name}')"><span class="mi">&#x1F195;</span> New conversation</div>` : ''}
+          ${!s.running ? `<div class="card-menu-item" onclick="event.stopPropagation();archiveSession('${s.name}')"><span class="mi">&#x1F4E6;</span> Archive</div>` : ''}
           <div class="card-menu-sep"></div>
           <div class="card-menu-item danger" onclick="event.stopPropagation();deleteSession('${s.name}')"><span class="mi">&#x2716;</span> Delete</div>
         </div>
@@ -6670,6 +6749,7 @@ function render() {
     if (inp) inp.focus({ preventScroll: true });
   }
 
+  _renderArchivedSection();
 }
 
 
@@ -6884,6 +6964,38 @@ function closeAllMenus() {
   openMenu = null;
 }
 document.addEventListener('click', e => { closeAllMenus(); closeActiveDropdown(e); closeAddMenu(); });
+
+function toggleArchived() {
+  archivedExpanded = !archivedExpanded;
+  _renderArchivedSection();
+}
+
+function _renderArchivedSection() {
+  const el = document.getElementById('archived-section');
+  if (!el) return;
+  const archived = sessions.filter(s => s.archived);
+  if (!archived.length) { el.innerHTML = ''; return; }
+  const chevron = `<span class="archived-chevron${archivedExpanded ? ' open' : ''}">&#x25B6;</span>`;
+  let html = `<div class="archived-footer" onclick="toggleArchived()">${chevron} ${archived.length} archived</div>`;
+  if (archivedExpanded) {
+    html += '<div class="archived-body">';
+    archived.forEach(s => {
+      const ago = s.last_activity ? timeAgo(s.last_activity) : '';
+      const preview = esc(s.preview || s.desc || '');
+      html += `<div class="archived-card">
+        <div class="archived-card-name">${esc(s.name)}</div>
+        ${ago ? `<div class="archived-card-meta">${ago}</div>` : ''}
+        ${preview ? `<div class="archived-card-preview">${preview}</div>` : ''}
+        <div class="archived-card-actions">
+          <button class="archived-wake-btn" onclick="wakeSession('${esc(s.name)}')">Wake</button>
+          <button class="archived-del-btn" onclick="deleteSession('${esc(s.name)}')">&#x2715;</button>
+        </div>
+      </div>`;
+    });
+    html += '</div>';
+  }
+  el.innerHTML = html;
+}
 
 // ── Active sessions dropdown ──
 let activeDropdownOpen = false;
@@ -7213,6 +7325,24 @@ async function deleteSession(session) {
   await apiCall(API + '/api/sessions/' + session + '/delete', { method: 'POST' });
   expanded.delete(session);
   await fetchSessions();
+}
+
+async function archiveSession(session) {
+  closeAllMenus();
+  const r = await apiCall(API + '/api/sessions/' + session + '/archive', { method: 'POST' });
+  if (r) showToast(session + ' archived');
+  await fetchSessions();
+}
+
+async function wakeSession(session) {
+  const r = await apiCall(API + '/api/sessions/' + session + '/wake', { method: 'POST' });
+  if (r) showToast('Waking ' + session + '…');
+  // Poll until running
+  for (let i = 0; i < 14; i++) {
+    await new Promise(res => setTimeout(res, 500));
+    await fetchSessions();
+    if (sessions.find(s => s.name === session && s.running)) break;
+  }
 }
 
 async function doStart(name) {
@@ -15536,6 +15666,12 @@ class CCHandler(BaseHTTPRequestHandler):
                         subprocess.run(["tmux", "send-keys", "-t", t, "Enter"],
                                        capture_output=True, timeout=5)
                 return self._json({"ok": True, "message": f"cloned as {new_name} (method: {method_used})", "started": ok})
+            if action == "archive":
+                ok, msg = archive_session(name)
+                return self._json({"ok": ok, "message": msg}, 200 if ok else 500)
+            if action == "wake":
+                ok, msg = wake_session(name)
+                return self._json({"ok": ok, "message": msg}, 200 if ok else 500)
             if action == "delete":
                 if is_running(name):
                     stop_session(name)
