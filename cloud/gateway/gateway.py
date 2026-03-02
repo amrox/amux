@@ -382,11 +382,13 @@ class Handler(BaseHTTPRequestHandler):
                     db.commit()
             cookie_val = _make_cookie(user_id)
             resp_body = json.dumps({"ok": True}).encode()
+            is_https = self.headers.get("X-Forwarded-Proto", "") == "https"
+            secure_flag = "; Secure" if is_https else ""
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(resp_body)))
             self.send_header("Set-Cookie",
-                f"amux_session={cookie_val}; HttpOnly; Secure; SameSite=Lax; "
+                f"amux_session={cookie_val}; HttpOnly{secure_flag}; SameSite=Lax; "
                 f"Max-Age={COOKIE_MAX_AGE}; Path=/")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
