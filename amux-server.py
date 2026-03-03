@@ -6984,9 +6984,9 @@ async function doCreateBranch(name) {
       gitInfo[name] = {...(gitInfo[name] || {}), branch, _conflict: false};
       render();
     } else {
-      alert('Branch creation failed: ' + (d.error || 'unknown error'));
+      showAlert('Branch creation failed: ' + (d.error || 'unknown error'));
     }
-  } catch(ex) { alert('Error: ' + ex.message); }
+  } catch(ex) { showAlert('Error: ' + ex.message); }
 }
 
 function toggle(name) {
@@ -13511,7 +13511,7 @@ async function openTeamInvite() {
   closeSettings();
   const res = await fetch('/api/org/invites', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({})});
   const data = await res.json();
-  if (!data.url) { alert('Failed to create invite'); return; }
+  if (!data.url) { showAlert('Failed to create invite: ' + (data.error || 'unknown error')); return; }
   // Show modal with copyable link
   const modal = document.createElement('div');
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:9999;';
