@@ -163,6 +163,8 @@ def _classify_request(method: str, path: str) -> tuple:
     # Uploads
     if path.startswith("/api/uploads") and method == "POST":
         return ("file", "uploaded", "", "")
+    if path == "/api/fs/upload" and method == "POST":
+        return ("file", "uploaded", "", "")
     # System
     if path == "/api/pull" and method == "POST":
         return ("system", "pull", "repo", "")
@@ -3878,6 +3880,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     cursor: pointer; font-size: 1rem; padding: 2px 6px; border-radius: 4px; line-height: 1;
     opacity: 0.4; transition: opacity 0.15s; }
   .explore-row:hover .explore-menu-btn, .explore-menu-btn:focus { opacity: 1; }
+  #files-body.files-drop-active { outline: 2px dashed var(--accent); outline-offset: -4px; background: color-mix(in srgb, var(--accent) 6%, var(--bg)); }
   .explore-menu-popup { position: fixed; background: var(--card); border: 1px solid var(--border);
     border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.3); z-index: 900; min-width: 140px;
     overflow: hidden; }
@@ -5390,6 +5393,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <button class="btn" id="files-home-btn" onclick="loadFiles(_filesCwd)" style="font-size:0.7rem;padding:2px 8px;" title="Go to working directory">&#x1F3E0;</button>
     <button class="btn" id="files-setcwd-btn" onclick="setFilesCwd()" style="font-size:0.7rem;padding:2px 8px;" title="Set current directory as working directory">&#x1F4CC; Set CWD</button>
     <button class="btn" id="files-hidden-btn" onclick="toggleFilesHidden()" style="font-size:0.7rem;padding:2px 8px;" title="Show hidden files">.*</button>
+    <button class="btn" id="files-upload-btn" onclick="triggerFilesUpload()" style="font-size:0.7rem;padding:2px 8px;" title="Upload files to current directory">&#x2191; Upload</button>
+    <input type="file" id="files-upload-input" multiple style="display:none;" onchange="handleFilesUpload(this.files)">
     <button class="btn" id="files-cache-btn" onclick="cacheFilesDir(_filesPath)" style="font-size:0.7rem;padding:2px 8px;" title="Cache directory for offline viewing">&#x2601; Cache</button>
     <span id="files-cache-status" style="font-size:0.7rem;color:var(--dim);white-space:nowrap;"></span>
   </div>
@@ -9557,6 +9562,43 @@ function _renderFilesEntries(body, path, data, cacheTs) {
       row.onclick = () => openFilePreview(entryPath);
     }
     body.appendChild(row);
+  }
+  // Drag-and-drop upload
+  body.ondragover = e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; body.classList.add('files-drop-active'); };
+  body.ondragleave = () => body.classList.remove('files-drop-active');
+  body.ondrop = e => { e.preventDefault(); body.classList.remove('files-drop-active'); if (e.dataTransfer.files.length) handleFilesUpload(e.dataTransfer.files); };
+}
+
+function triggerFilesUpload() {
+  const inp = document.getElementById('files-upload-input');
+  inp.value = '';
+  inp.click();
+}
+
+async function handleFilesUpload(files) {
+  if (!files || !files.length) return;
+  const statusEl = document.getElementById('files-cache-status');
+  let uploaded = 0, failed = 0;
+  for (const file of Array.from(files)) {
+    statusEl.textContent = `Uploading ${file.name}…`;
+    const fd = new FormData();
+    fd.append('dir', _filesPath);
+    fd.append('file', file, file.name);
+    try {
+      const r = await fetch(API + '/api/fs/upload', { method: 'POST', body: fd });
+      const d = await r.json();
+      if (r.ok && d.saved?.length) uploaded++;
+      else { failed++; showToast('Upload failed: ' + (d.error || r.status)); }
+    } catch(e) {
+      failed++;
+      showToast('Upload error: ' + e.message);
+    }
+  }
+  statusEl.textContent = '';
+  document.getElementById('files-upload-input').value = '';
+  if (uploaded) {
+    showToast(`Uploaded ${uploaded} file${uploaded !== 1 ? 's' : ''} to ${_filesPath}`);
+    loadFiles(_filesPath);
   }
 }
 
@@ -14962,6 +15004,51 @@ class CCHandler(BaseHTTPRequestHandler):
                 return self._json({"path": str(p), "parent": str(p.parent) if p.parent != p else None, "entries": entries})
             except PermissionError:
                 return self._json({"error": "permission denied"}, 403)
+
+        # ── Directory upload (Files view) ──
+        if method == "POST" and path == "/api/fs/upload":
+            ctype = self.headers.get("Content-Type", "")
+            if "multipart/form-data" not in ctype:
+                return self._json({"error": "expected multipart/form-data"}, 400)
+            length = int(self.headers.get("Content-Length", 0))
+            if length > 200 * 1024 * 1024:
+                return self._json({"error": "request too large (max 200 MB)"}, 413)
+            raw = self.rfile.read(length)
+            from email import message_from_bytes
+            from email.policy import compat32 as _compat32
+            msg = message_from_bytes(
+                (f"Content-Type: {ctype}\r\n\r\n").encode() + raw,
+                policy=_compat32,
+            )
+            parts = msg.get_payload()
+            if not isinstance(parts, list):
+                return self._json({"error": "invalid multipart"}, 400)
+            # find target directory field
+            target_dir = None
+            for part in parts:
+                if part.get_param("name", header="content-disposition") == "dir":
+                    target_dir = (part.get_payload(decode=True) or b"").decode("utf-8", errors="replace").strip()
+            if not target_dir:
+                return self._json({"error": "missing 'dir' field"}, 400)
+            dest_dir = Path(target_dir).expanduser().resolve()
+            if not dest_dir.is_dir():
+                return self._json({"error": f"not a directory: {target_dir}"}, 400)
+            saved = []
+            for part in parts:
+                filename = part.get_param("filename", header="content-disposition")
+                if not filename:
+                    continue
+                safe_name = re.sub(r'[^\w.\- ]', '_', Path(filename).name)[:240] or "upload"
+                data = part.get_payload(decode=True) or b""
+                dest = dest_dir / safe_name
+                if dest.exists():
+                    stem, suffix, i = dest.stem, dest.suffix, 1
+                    while dest.exists():
+                        dest = dest_dir / f"{stem}_{i}{suffix}"
+                        i += 1
+                dest.write_bytes(data)
+                saved.append({"name": dest.name, "size": len(data)})
+            return self._json({"saved": saved})
 
         # ── File upload ──
         if method == "POST" and path == "/api/upload":
