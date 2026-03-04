@@ -1481,6 +1481,15 @@ CREATE TABLE IF NOT EXISTS schedules (
     deleted     INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_schedules_next ON schedules(next_run) WHERE deleted IS NULL AND enabled=1;
+CREATE TABLE IF NOT EXISTS schedule_runs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    schedule_id TEXT NOT NULL,
+    ran_at      INTEGER NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'ok',
+    note        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sched_runs_sched ON schedule_runs(schedule_id, ran_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sched_runs_ran   ON schedule_runs(ran_at DESC);
 CREATE TABLE IF NOT EXISTS reports (
     id           TEXT PRIMARY KEY,
     name         TEXT NOT NULL,
@@ -1663,6 +1672,8 @@ def _init_db():
         "ALTER TABLE issues ADD COLUMN owner_type TEXT NOT NULL DEFAULT 'human'",
         "ALTER TABLE issues ADD COLUMN due_time TEXT",
         "ALTER TABLE issues ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE schedules ADD COLUMN run_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE schedules ADD COLUMN schedule_expr TEXT",
     ]:
         try:
             db.execute(migration)
@@ -2209,6 +2220,88 @@ def _upload_ical_to_s3():
 
 
 
+def _cron_next_run(parts: list, base) -> str | None:
+    """Compute next fire time for a 5-field cron spec (MIN HOUR DOM MON DOW)."""
+    from datetime import timedelta
+
+    def _matches(value: int, spec: str) -> bool:
+        if spec == '*':
+            return True
+        if spec.startswith('*/'):
+            step = int(spec[2:])
+            return value % step == 0
+        if '-' in spec:
+            lo, hi = spec.split('-', 1)
+            return int(lo) <= value <= int(hi)
+        if ',' in spec:
+            return value in [int(x) for x in spec.split(',')]
+        return value == int(spec)
+
+    min_s, hour_s, dom_s, mon_s, dow_s = parts
+    t = base.replace(second=0, microsecond=0)
+    from datetime import timedelta as _td
+    t += _td(minutes=1)
+    limit = base + _td(days=366)
+    while t < limit:
+        if (_matches(t.month, mon_s) and _matches(t.day, dom_s) and
+                _matches(t.weekday(), dow_s) and _matches(t.hour, hour_s) and
+                _matches(t.minute, min_s)):
+            return t.strftime("%Y-%m-%dT%H:%M")
+        t += _td(minutes=1)
+    return None
+
+
+def _parse_next_run(expr: str, from_ts: float | None = None) -> str | None:
+    """Parse a free-text schedule expression and return next ISO run time.
+
+    Supported formats:
+      every Xm / Xh / Xd          — interval from now
+      daily at HH:MM               — delegates to _next_run_dt
+      weekly on <dayname> at HH:MM — delegates to _next_run_dt
+      MIN HOUR DOM MON DOW         — 5-field cron
+    """
+    import re as _re
+    from datetime import datetime, timedelta
+
+    if not expr or not expr.strip():
+        return None
+    base = datetime.fromtimestamp(from_ts) if from_ts else datetime.now()
+    s = expr.strip().lower()
+
+    # every Xm/h/d
+    m = _re.match(r'^every\s+(\d+)\s*(m|min|minutes?|h|hr|hours?|d|days?)$', s)
+    if m:
+        n, unit = int(m.group(1)), m.group(2)[0]
+        delta = {'m': timedelta(minutes=n), 'h': timedelta(hours=n), 'd': timedelta(days=n)}[unit]
+        return (base + delta).strftime("%Y-%m-%dT%H:%M")
+
+    # daily at HH:MM
+    m = _re.match(r'^daily\s+at\s+(\d{1,2}):(\d{2})$', s)
+    if m:
+        return _next_run_dt({"sched_type": "recurring", "recurrence": "daily",
+                              "run_at": f"{int(m.group(1)):02d}:{m.group(2)}"})
+
+    # weekly on <day> at HH:MM
+    _DAY_MAP = {'monday':0,'tuesday':1,'wednesday':2,'thursday':3,'friday':4,'saturday':5,'sunday':6,
+                'mon':0,'tue':1,'wed':2,'thu':3,'fri':4,'sat':5,'sun':6}
+    m = _re.match(r'^weekly\s+on\s+(\w+)\s+at\s+(\d{1,2}):(\d{2})$', s)
+    if m:
+        day_num = _DAY_MAP.get(m.group(1))
+        if day_num is not None:
+            return _next_run_dt({"sched_type": "recurring", "recurrence": "weekly",
+                                  "run_at": f"{day_num}:{int(m.group(2)):02d}:{m.group(3)}"})
+
+    # 5-field cron
+    parts = expr.strip().split()
+    if len(parts) == 5:
+        try:
+            return _cron_next_run(parts, base)
+        except Exception:
+            pass
+
+    return None
+
+
 def _next_run_dt(sched):
     """Compute next run datetime for a schedule. Returns ISO string or None."""
     from datetime import datetime, timedelta
@@ -2269,16 +2362,33 @@ def _next_run_dt(sched):
 
 
 def _run_schedule(sched):
-    """Execute a schedule entry — send command to tmux session."""
-    import subprocess
+    """Execute a schedule entry — send message to tmux session and log the run."""
     session = sched["session"]
-    command = sched["command"]
-    slog(f"[sched] running '{sched['title']}' on session '{session}'")
+    command = sched.get("command") or ""
+    slog(f"[sched] running '{sched['title']}' → session '{session}'")
+    status, note = "ok", None
     try:
-        subprocess.run(["tmux", "send-keys", "-t", session, command, "Enter"],
-                       capture_output=True, timeout=5)
+        ok, err = send_text(session, command)
+        if not ok:
+            status, note = "error", str(err)
+            slog(f"[sched] send failed for '{sched['title']}': {err}")
     except Exception as e:
-        slog(f"[sched] error running '{sched['title']}': {e}")
+        status, note = "error", str(e)
+        slog(f"[sched] exception running '{sched['title']}': {e}")
+    try:
+        db = get_db()
+        db.execute(
+            "INSERT INTO schedule_runs (schedule_id, ran_at, status, note) VALUES (?,?,?,?)",
+            (sched["id"], int(time.time()), status, note)
+        )
+        db.execute(
+            "UPDATE schedules SET run_count = COALESCE(run_count,0) + 1 WHERE id=?",
+            (sched["id"],)
+        )
+        db.commit()
+    except Exception as log_err:
+        slog(f"[sched] failed to log run: {log_err}")
+    _push_alert("scheduler", session, f"Ran schedule: {sched['title']}")
 
 
 def _scheduler_loop():
@@ -2319,7 +2429,8 @@ def _scheduler_loop():
                     db.execute("UPDATE schedules SET enabled=0, last_run=?, updated=? WHERE id=?",
                                (now_str, now_ts, sched["id"]))
                 else:
-                    next_r = _next_run_dt(sched)
+                    expr = sched.get("schedule_expr") or ""
+                    next_r = (_parse_next_run(expr) if expr else None) or _next_run_dt(sched)
                     db.execute("UPDATE schedules SET last_run=?, next_run=?, updated=? WHERE id=?",
                                (now_str, next_r, now_ts, sched["id"]))
             if due:
@@ -5401,6 +5512,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <button id="tab-sessions" class="active" onclick="switchView('sessions')">Sessions</button>
   <button id="tab-board" onclick="switchView('board')">Board</button>
   <button id="tab-calendar" onclick="switchView('calendar')">Calendar</button>
+  <button id="tab-scheduler" onclick="switchView('scheduler')">Scheduler</button>
   <button id="tab-reports" onclick="switchView('reports')">Reports</button>
   <button id="tab-notifications" onclick="switchView('notifications')">Notifications</button>
   <button id="tab-files" onclick="switchView('files')">Files</button>
@@ -5478,6 +5590,20 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     </div>
   </div>
   <div id="cal-body"></div>
+</div>
+
+<!-- Scheduler view -->
+<div id="scheduler-view" style="display:none;">
+  <div style="padding:10px 12px 6px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);">
+    <span style="font-weight:600;font-size:0.9rem;">Scheduler</span>
+    <div style="flex:1;"></div>
+    <button class="btn" onclick="openSchedModal()" style="font-size:0.78rem;padding:4px 10px;">+ New Schedule</button>
+  </div>
+  <div id="scheduler-list" style="padding:10px 12px;display:flex;flex-direction:column;gap:8px;overflow-y:auto;"></div>
+  <div style="padding:0 12px 12px;">
+    <div style="font-size:0.78rem;font-weight:600;color:var(--dim);padding:8px 0 4px;border-top:1px solid var(--border);">Recent Runs</div>
+    <div id="scheduler-runs"></div>
+  </div>
 </div>
 
 <!-- Email events view -->
@@ -5710,6 +5836,17 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <input id="sched-run-at" type="datetime-local" class="board-detail-session-select" style="width:100%;">
     </div>
     <div id="sched-rec-fields" style="display:none;">
+      <div class="field-group">
+        <label class="field-label">Schedule expression <span class="field-optional">(optional — overrides dropdowns below)</span></label>
+        <input id="sched-expr" type="text" placeholder='e.g. "every 30m", "daily at 09:00", "0 9 * * 1-5"' autocomplete="off">
+        <div style="font-size:0.65rem;color:var(--dim);margin-top:3px;display:flex;gap:6px;flex-wrap:wrap;">
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every 1h'" style="color:var(--accent);">every 1h</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every 30m'" style="color:var(--accent);">every 30m</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='daily at 09:00'" style="color:var(--accent);">daily at 09:00</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='weekly on monday at 08:00'" style="color:var(--accent);">weekly on monday</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='0 9 * * 1-5'" style="color:var(--accent);">0 9 * * 1-5 (cron)</a>
+        </div>
+      </div>
       <div class="field-group">
         <label class="field-label">Repeat</label>
         <select id="sched-recurrence" class="board-detail-session-select" style="width:100%;" onchange="updateSchedRecUI()">
@@ -7367,6 +7504,7 @@ const ALL_TABS = [
   { id: 'sessions',      label: 'Sessions',   required: true },
   { id: 'board',         label: 'Board' },
   { id: 'calendar',      label: 'Calendar' },
+  { id: 'scheduler',     label: 'Scheduler' },
   { id: 'reports',       label: 'Reports' },
   { id: 'notifications', label: 'Notifications' },
   { id: 'files',         label: 'Files' },
@@ -11204,6 +11342,7 @@ function switchView(view) {
   document.getElementById('session-view').style.display = view === 'sessions' ? '' : 'none';
   document.getElementById('board-view').style.display = view === 'board' ? '' : 'none';
   document.getElementById('calendar-view').style.display = view === 'calendar' ? '' : 'none';
+  document.getElementById('scheduler-view').style.display = view === 'scheduler' ? '' : 'none';
   document.getElementById('reports-view').style.display = view === 'reports' ? '' : 'none';
   document.getElementById('notifications-view').style.display = view === 'notifications' ? '' : 'none';
   document.getElementById('files-view').style.display = view === 'files' ? 'flex' : 'none';
@@ -11213,6 +11352,7 @@ function switchView(view) {
   document.getElementById('tab-sessions').classList.toggle('active', view === 'sessions');
   document.getElementById('tab-board').classList.toggle('active', view === 'board');
   document.getElementById('tab-calendar').classList.toggle('active', view === 'calendar');
+  document.getElementById('tab-scheduler').classList.toggle('active', view === 'scheduler');
   document.getElementById('tab-reports').classList.toggle('active', view === 'reports');
   document.getElementById('tab-notifications').classList.toggle('active', view === 'notifications');
   document.getElementById('tab-files').classList.toggle('active', view === 'files');
@@ -11231,6 +11371,8 @@ function switchView(view) {
     if (_sseFallback && !boardTimer) boardTimer = setInterval(fetchBoard, 5000);
   } else if (view === 'calendar') {
     Promise.all([fetchBoard(), fetchSchedules()]).then(() => renderCalendar());
+  } else if (view === 'scheduler') {
+    Promise.all([fetchSchedules(), fetchSchedulerRuns()]).then(() => renderScheduler());
   } else {
     if (boardTimer) { clearInterval(boardTimer); boardTimer = null; }
   }
@@ -11523,6 +11665,89 @@ async function fetchSchedules() {
     const r = await fetch(API + '/api/schedules');
     if (r.ok) { schedules = await r.json(); }
   } catch(e) {}
+}
+
+let _schedulerRuns = [];
+async function fetchSchedulerRuns() {
+  try {
+    const r = await fetch(API + '/api/schedules/runs');
+    if (r.ok) _schedulerRuns = await r.json();
+  } catch(e) {}
+}
+
+function renderScheduler() {
+  const listEl = document.getElementById('scheduler-list');
+  const runsEl = document.getElementById('scheduler-runs');
+  if (!listEl || !runsEl) return;
+
+  // ── Schedule list ─────────────────────────────────────────────────────────
+  if (!schedules.length) {
+    listEl.innerHTML = `<div style="text-align:center;padding:40px 0;color:var(--dim);">
+      <div style="font-size:2rem;margin-bottom:10px;">⏰</div>
+      <div style="font-weight:600;font-size:0.9rem;margin-bottom:6px;color:var(--text);">No schedules yet</div>
+      <div style="font-size:0.82rem;">Create a schedule to run commands in sessions on a recurring timer.</div>
+    </div>`;
+  } else {
+    listEl.innerHTML = schedules.map(s => {
+      const nextRun = s.next_run ? s.next_run.replace('T', ' ') : '—';
+      const lastRun = s.last_run ? s.last_run.replace('T', ' ') : 'never';
+      const recLabel = s.schedule_expr || (s.sched_type === 'once' ? 'once' : (s.recurrence || 'recurring'));
+      const dimmed = !s.enabled ? 'opacity:0.5;' : '';
+      return `<div class="card" style="padding:10px 12px;${dimmed}">
+        <div style="display:flex;align-items:flex-start;gap:10px;">
+          <label style="display:flex;align-items:center;cursor:pointer;flex-shrink:0;margin-top:1px;">
+            <input type="checkbox" ${s.enabled ? 'checked' : ''}
+              onchange="toggleSchedEnabled('${esc(s.id)}', this.checked)"
+              style="width:auto;accent-color:var(--accent);">
+          </label>
+          <div style="flex:1;min-width:0;">
+            <div style="font-weight:600;font-size:0.85rem;">${esc(s.title)}</div>
+            <div style="font-size:0.72rem;color:var(--dim);margin-top:2px;">
+              <span style="color:var(--accent);">${esc(s.session)}</span>
+              &nbsp;·&nbsp;<code style="font-size:0.7rem;background:var(--card);border:1px solid var(--border);border-radius:3px;padding:0 3px;">${esc(s.command)}</code>
+            </div>
+            <div style="font-size:0.7rem;color:var(--dim);margin-top:5px;display:flex;gap:10px;flex-wrap:wrap;">
+              <span>🔁 ${esc(recLabel)}</span>
+              <span>▶ next: <strong style="color:var(--text);">${esc(nextRun)}</strong></span>
+              <span>✓ last: ${esc(lastRun)}</span>
+              <span>runs: <strong>${s.run_count || 0}</strong></span>
+            </div>
+          </div>
+          <div style="display:flex;gap:4px;flex-shrink:0;">
+            <button class="btn" style="font-size:0.7rem;padding:2px 8px;"
+              onclick="openSchedModal('${esc(s.id)}')">Edit</button>
+            <button class="btn" style="font-size:0.7rem;padding:2px 8px;color:var(--red);"
+              onclick="deleteSchedule('${esc(s.id)}')">Delete</button>
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  // ── Recent runs ───────────────────────────────────────────────────────────
+  if (!_schedulerRuns.length) {
+    runsEl.innerHTML = `<div style="color:var(--dim);font-size:0.78rem;padding:4px 0;">No runs recorded yet.</div>`;
+  } else {
+    runsEl.innerHTML = _schedulerRuns.slice(0, 30).map(r => {
+      const ts = r.ran_at ? new Date(r.ran_at * 1000).toLocaleString() : '?';
+      const okColor = r.status === 'ok' ? 'var(--green,#4ade80)' : 'var(--red)';
+      return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border);font-size:0.75rem;">
+        <span style="color:${okColor};font-weight:600;min-width:38px;">${esc(r.status)}</span>
+        <span style="color:var(--dim);min-width:140px;">${esc(ts)}</span>
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(r.title || r.schedule_id)}</span>
+        ${r.note ? `<span style="color:var(--red);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(r.note)}">${esc(r.note)}</span>` : ''}
+      </div>`;
+    }).join('');
+  }
+}
+
+async function toggleSchedEnabled(id, enabled) {
+  await fetch(API + '/api/schedules/' + id, {
+    method: 'PATCH', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ enabled: enabled ? 1 : 0 })
+  });
+  await fetchSchedules();
+  renderScheduler();
 }
 
 async function fetchBoard() {
@@ -12068,12 +12293,14 @@ function openSchedModal(editId) {
       document.getElementById('sched-command').value = s.command;
       document.getElementById('sched-type').value = s.sched_type;
       document.getElementById('sched-run-at').value = s.run_at || '';
+      document.getElementById('sched-expr').value = s.schedule_expr || '';
       if (s.recurrence) document.getElementById('sched-recurrence').value = s.recurrence;
     }
     document.getElementById('sched-save-btn').textContent = 'Update';
   } else {
     document.getElementById('sched-title').value = '';
     document.getElementById('sched-command').value = '';
+    document.getElementById('sched-expr').value = '';
     document.getElementById('sched-type').value = 'once';
     document.getElementById('sched-run-at').value = new Date(Date.now() + 3600000).toISOString().slice(0,16);
     document.getElementById('sched-save-btn').textContent = 'Save';
@@ -12112,13 +12339,16 @@ async function saveSchedModal() {
       run_at = time;
     }
   }
-  const payload = { title, session, command, sched_type: stype, recurrence: recurrence || null, run_at };
+  const schedExpr = document.getElementById('sched-expr').value.trim();
+  const payload = { title, session, command, sched_type: stype, recurrence: recurrence || null, run_at,
+                    schedule_expr: schedExpr || null };
   const url = _schedEditId ? API + '/api/schedules/' + _schedEditId : API + '/api/schedules';
   const method = _schedEditId ? 'PATCH' : 'POST';
   const r = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
   if (r.ok) {
     await fetchSchedules();
     renderCalendar();
+    renderScheduler();
     closeSchedModal();
   }
 }
@@ -12127,6 +12357,7 @@ async function deleteSchedule(id) {
   await fetch(API + '/api/schedules/' + id, { method: 'DELETE' });
   await fetchSchedules();
   renderCalendar();
+  renderScheduler();
 }
 
 function openBoardAdd(statusOrDate, prefillDate) {
@@ -15865,6 +16096,17 @@ class CCHandler(BaseHTTPRequestHandler):
                 self._json([_sched_row_to_dict(r, cols) for r in rows])
                 return
 
+            # GET /api/schedules/runs — recent runs across all schedules
+            if method == "GET" and path == "/api/schedules/runs":
+                db = get_db()
+                rows = db.execute(
+                    "SELECT sr.id, sr.schedule_id, sr.ran_at, sr.status, sr.note, s.title "
+                    "FROM schedule_runs sr LEFT JOIN schedules s ON s.id = sr.schedule_id "
+                    "ORDER BY sr.ran_at DESC LIMIT 50"
+                ).fetchall()
+                self._json([dict(r) for r in rows])
+                return
+
             # POST /api/schedules
             if method == "POST" and path == "/api/schedules":
                 db = get_db()
@@ -15872,6 +16114,7 @@ class CCHandler(BaseHTTPRequestHandler):
                 now_ts = int(_time.time())
                 sid = _next_issue_id("SCHED")
                 stype = data.get("sched_type", "once")
+                schedule_expr = (data.get("schedule_expr") or "").strip()
                 run_at = data.get("run_at", _dt.now().strftime("%Y-%m-%dT%H:%M"))
                 sched = {
                     "id": sid, "title": data.get("title", ""),
@@ -15880,26 +16123,44 @@ class CCHandler(BaseHTTPRequestHandler):
                     "sched_type": stype,
                     "recurrence": data.get("recurrence"),
                     "run_at": run_at, "next_run": run_at,
-                    "last_run": None, "enabled": 1,
+                    "last_run": None, "enabled": 1, "run_count": 0,
+                    "schedule_expr": schedule_expr or None,
                     "created": now_ts, "updated": now_ts, "deleted": None,
                 }
-                # compute next_run
-                sched["next_run"] = _next_run_dt(sched) or run_at
+                # compute next_run — prefer schedule_expr if provided
+                if schedule_expr:
+                    stype = "recurring"
+                    sched["sched_type"] = stype
+                    sched["next_run"] = _parse_next_run(schedule_expr) or run_at
+                else:
+                    sched["next_run"] = _next_run_dt(sched) or run_at
                 db.execute(
                     """INSERT INTO schedules (id,title,session,command,sched_type,recurrence,
-                       run_at,next_run,last_run,enabled,created,updated,deleted)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       run_at,next_run,last_run,enabled,run_count,schedule_expr,created,updated,deleted)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (sched["id"], sched["title"], sched["session"], sched["command"],
                      sched["sched_type"], sched["recurrence"], sched["run_at"],
                      sched["next_run"], sched["last_run"], sched["enabled"],
+                     sched["run_count"], sched["schedule_expr"],
                      sched["created"], sched["updated"], sched["deleted"])
                 )
                 db.commit()
-
                 self._json(sched, 201)
                 return
 
             sched_id = path.split("/api/schedules/", 1)[-1].split("?")[0]
+
+            # GET /api/schedules/<id>/runs
+            if method == "GET" and sched_id.endswith("/runs"):
+                sid_for_runs = sched_id[:-5]  # strip "/runs"
+                db = get_db()
+                rows = db.execute(
+                    "SELECT id, schedule_id, ran_at, status, note FROM schedule_runs "
+                    "WHERE schedule_id=? ORDER BY ran_at DESC LIMIT 20",
+                    (sid_for_runs,)
+                ).fetchall()
+                self._json([dict(r) for r in rows])
+                return
 
             # GET /api/schedules/<id>
             if method == "GET":
@@ -15919,20 +16180,24 @@ class CCHandler(BaseHTTPRequestHandler):
                 cols = _sched_cols(db)
                 sched = _sched_row_to_dict(row, cols)
                 body = self._read_body()
-                for k in ("title","session","command","sched_type","recurrence","run_at","enabled"):
+                for k in ("title","session","command","sched_type","recurrence","run_at","enabled","schedule_expr"):
                     if k in body:
                         sched[k] = body[k]
-                sched["next_run"] = _next_run_dt(sched) or sched.get("run_at", "")
+                expr = (sched.get("schedule_expr") or "").strip()
+                if expr:
+                    sched["sched_type"] = "recurring"
+                    sched["next_run"] = _parse_next_run(expr) or sched.get("run_at", "")
+                else:
+                    sched["next_run"] = _next_run_dt(sched) or sched.get("run_at", "")
                 sched["updated"] = int(_time.time())
                 db.execute(
                     """UPDATE schedules SET title=?,session=?,command=?,sched_type=?,recurrence=?,
-                       run_at=?,next_run=?,enabled=?,updated=? WHERE id=?""",
+                       run_at=?,next_run=?,enabled=?,schedule_expr=?,updated=? WHERE id=?""",
                     (sched["title"], sched["session"], sched["command"], sched["sched_type"],
                      sched["recurrence"], sched["run_at"], sched["next_run"],
-                     sched["enabled"], sched["updated"], sched_id)
+                     sched["enabled"], sched.get("schedule_expr"), sched["updated"], sched_id)
                 )
                 db.commit()
-
                 self._json(sched)
                 return
 
