@@ -48,11 +48,13 @@ CC_LOGS = CC_HOME / "logs"
 CC_MEMORY = CC_HOME / "memory"
 CC_BOARD_DIR = CC_HOME / "board"
 CC_UPLOADS = CC_HOME / "uploads"
+CC_NOTES = CC_HOME / "notes"
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 CC_LOGS.mkdir(parents=True, exist_ok=True)
 CC_MEMORY.mkdir(parents=True, exist_ok=True)
 CC_BOARD_DIR.mkdir(parents=True, exist_ok=True)
 CC_UPLOADS.mkdir(parents=True, exist_ok=True)
+CC_NOTES.mkdir(parents=True, exist_ok=True)
 
 UPLOAD_ALLOWED_EXTS = {
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",
@@ -3885,6 +3887,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .edit-box {
     background: var(--card); border: 1px solid var(--border); border-radius: 12px;
     padding: 20px; width: 100%; max-width: 380px;
+    max-height: calc(100dvh - 40px); overflow-y: auto;
   }
   .edit-box h3 { font-size: 1rem; margin-bottom: 14px; }
   .edit-box input, .edit-box select, .edit-box textarea {
@@ -5280,6 +5283,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .board-edit-box {
     background: var(--card); border: 1px solid var(--border);
     border-radius: 12px; padding: 16px; width: 100%; max-width: 400px;
+    max-height: calc(100dvh - 32px); overflow-y: auto;
   }
   .board-edit-box input, .board-edit-box textarea, .board-edit-box select {
     width: 100%; padding: 8px 10px; border-radius: 8px;
@@ -5392,6 +5396,87 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .gp-send .send-row { gap: 8px; }
   #tab-grid { display: none; }
   @media (min-width: 769px) { #tab-grid { display: block; } }
+
+  /* Notes view */
+  #notes-view { display:none; flex:1; overflow:hidden; flex-direction:row; }
+  #notes-view.active { display:flex; }
+  .notes-sidebar {
+    width: 220px; min-width: 160px; border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0;
+    background: var(--card);
+  }
+  .notes-sidebar-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 12px 6px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  .notes-new-btn {
+    background: var(--accent); color: #fff; border: none; border-radius: 6px;
+    width: 24px; height: 24px; font-size: 1.1rem; cursor: pointer; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .notes-search-wrap { padding: 6px 8px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .notes-list { flex: 1; overflow-y: auto; }
+  .notes-list-item {
+    padding: 8px 12px; cursor: pointer; border-bottom: 1px solid rgba(139,148,158,0.1);
+    font-size: 0.82rem; color: var(--text); line-height: 1.3;
+    transition: background 0.1s;
+  }
+  .notes-list-item:hover { background: rgba(139,148,158,0.08); }
+  .notes-list-item.active { background: rgba(88,166,255,0.12); color: var(--accent); }
+  .notes-list-item .nli-title { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .notes-list-item .nli-date { font-size: 0.7rem; color: var(--dim); margin-top: 2px; }
+  .notes-list-empty { padding: 16px 12px; color: var(--dim); font-size: 0.8rem; text-align: center; }
+  .notes-editor-pane {
+    flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative;
+  }
+  .notes-editor-header {
+    display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+    border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  .notes-title-input {
+    flex: 1; background: transparent; border: none; outline: none;
+    color: var(--text); font-size: 0.95rem; font-weight: 600;
+    font-family: inherit;
+  }
+  .notes-tab-btn {
+    background: transparent; border: 1px solid var(--border); border-radius: 5px;
+    color: var(--dim); font-size: 0.75rem; padding: 3px 8px; cursor: pointer;
+  }
+  .notes-tab-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .notes-delete-btn {
+    background: transparent; border: none; color: var(--dim); cursor: pointer;
+    font-size: 0.9rem; padding: 2px 4px; opacity: 0.6;
+  }
+  .notes-delete-btn:hover { color: var(--red); opacity: 1; }
+  .notes-edit-area { flex: 1; display: flex; overflow: hidden; }
+  .notes-body-input {
+    flex: 1; resize: none; border: none; outline: none; padding: 14px 16px;
+    background: var(--bg); color: var(--text); font-size: 0.85rem;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    line-height: 1.6; tab-size: 2;
+  }
+  .notes-preview-area {
+    flex: 1; overflow-y: auto; padding: 14px 20px;
+    background: var(--bg); color: var(--text); font-size: 0.88rem; line-height: 1.7;
+  }
+  .notes-md-preview h1 { font-size: 1.4rem; margin: 0 0 10px; }
+  .notes-md-preview h2 { font-size: 1.15rem; margin: 14px 0 8px; }
+  .notes-md-preview h3 { font-size: 1rem; margin: 12px 0 6px; }
+  .notes-md-preview code { background: rgba(139,148,158,0.15); padding: 1px 4px; border-radius: 3px; font-size: 0.82em; }
+  .notes-md-preview pre { background: rgba(139,148,158,0.12); padding: 10px 12px; border-radius: 6px; overflow-x: auto; }
+  .notes-md-preview pre code { background: none; padding: 0; }
+  .notes-md-preview blockquote { border-left: 3px solid var(--accent); margin: 8px 0; padding: 4px 12px; color: var(--dim); }
+  .notes-md-preview ul, .notes-md-preview ol { padding-left: 20px; margin: 6px 0; }
+  .notes-md-preview li { margin: 2px 0; }
+  .notes-md-preview a { color: var(--accent); }
+  .notes-md-preview hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+  .notes-md-preview table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+  .notes-md-preview th, .notes-md-preview td { border: 1px solid var(--border); padding: 5px 10px; font-size: 0.83rem; }
+  .notes-md-preview th { background: rgba(139,148,158,0.1); }
+  .notes-empty-state {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+  }
 </style>
 </head>
 <body>
@@ -5528,6 +5613,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <button id="tab-browser" onclick="switchView('browser')">Browser</button>
   <button id="tab-grid" onclick="enterGridMode()">Workspace</button>
   <button id="tab-email" onclick="switchView('email')">Email</button>
+  <button id="tab-notes" onclick="switchView('notes')">Notes</button>
 </div>
 <div class="tab-customize-wrap">
   <button class="tab-customize-btn" onclick="event.stopPropagation();toggleTabCustomizer()" title="Show/hide tabs">&#x229E;</button>
@@ -5818,6 +5904,42 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       onkeydown="_rbTypeKey(event)">
     <button class="btn" onclick="_rbCmd('screenshot')" style="font-size:0.7rem;padding:3px 8px;" title="Refresh screenshot">&#x1F4F7;</button>
     <button class="btn" onclick="_rbStop()" style="font-size:0.7rem;padding:3px 8px;color:var(--red);" title="Close browser">&#x2716;</button>
+  </div>
+</div>
+
+<!-- Notes view -->
+<div id="notes-view" style="display:none;flex:1;overflow:hidden;display:none;flex-direction:row;">
+  <!-- Sidebar -->
+  <div class="notes-sidebar" id="notes-sidebar">
+    <div class="notes-sidebar-header">
+      <span style="font-weight:600;font-size:0.85rem;">Notes</span>
+      <button class="notes-new-btn" onclick="_notesNew()" title="New note">+</button>
+    </div>
+    <div class="notes-search-wrap">
+      <input id="notes-search" type="search" placeholder="Search notes…" oninput="_notesSearchFilter(this.value)" style="width:100%;box-sizing:border-box;padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.8rem;outline:none;">
+    </div>
+    <div id="notes-list" class="notes-list"></div>
+  </div>
+  <!-- Editor pane -->
+  <div class="notes-editor-pane" id="notes-editor-pane">
+    <div class="notes-editor-header">
+      <input id="notes-title" type="text" placeholder="Note title…" class="notes-title-input" oninput="_notesTitleChange()" onblur="_notesSaveDebounce()">
+      <div style="display:flex;gap:6px;align-items:center;">
+        <span id="notes-save-status" style="font-size:0.72rem;color:var(--dim);"></span>
+        <button class="notes-tab-btn" id="notes-tab-edit" onclick="_notesSetTab('edit')" title="Edit">Edit</button>
+        <button class="notes-tab-btn" id="notes-tab-preview" onclick="_notesSetTab('preview')" title="Preview">Preview</button>
+        <button class="notes-delete-btn" onclick="_notesDelete()" title="Delete note">&#x1F5D1;</button>
+      </div>
+    </div>
+    <div id="notes-edit-area" class="notes-edit-area">
+      <textarea id="notes-body" class="notes-body-input" placeholder="Write in Markdown…" oninput="_notesSaveDebounce()"></textarea>
+    </div>
+    <div id="notes-preview-area" class="notes-preview-area notes-md-preview" style="display:none;"></div>
+    <div class="notes-empty-state" id="notes-empty-state">
+      <div style="font-size:2rem;margin-bottom:8px;">📝</div>
+      <div style="color:var(--dim);font-size:0.85rem;">Select a note or create a new one</div>
+      <button class="btn" onclick="_notesNew()" style="margin-top:12px;font-size:0.8rem;">+ New Note</button>
+    </div>
   </div>
 </div>
 
@@ -7533,6 +7655,7 @@ const ALL_TABS = [
   { id: 'browser',       label: 'Browser' },
   { id: 'grid',          label: 'Workspace' },
   { id: 'email',         label: 'Email' },
+  { id: 'notes',         label: 'Notes' },
 ];
 
 let hiddenTabs = (function() {
@@ -11472,6 +11595,7 @@ function switchView(view) {
   document.getElementById('browser-view').style.display = view === 'browser' ? 'flex' : 'none';
   document.getElementById('logs-view').style.display = view === 'logs' ? 'flex' : 'none';
   document.getElementById('email-view').style.display = view === 'email' ? '' : 'none';
+  document.getElementById('notes-view').classList.toggle('active', view === 'notes');
   document.getElementById('tab-sessions').classList.toggle('active', view === 'sessions');
   document.getElementById('tab-board').classList.toggle('active', view === 'board');
   document.getElementById('tab-calendar').classList.toggle('active', view === 'calendar');
@@ -11482,10 +11606,12 @@ function switchView(view) {
   document.getElementById('tab-browser').classList.toggle('active', view === 'browser');
   document.getElementById('tab-logs').classList.toggle('active', view === 'logs');
   document.getElementById('tab-email').classList.toggle('active', view === 'email');
+  document.getElementById('tab-notes').classList.toggle('active', view === 'notes');
   if (view === 'files') loadFiles(_filesPath);
   if (view === 'reports') fetchReports();
   if (view === 'browser') _rbLoadProfiles();
   if (view === 'email') _emailLoad();
+  if (view === 'notes') _notesLoad();
   if (view === 'logs') { fetchLogs(); _startLogsTimer(); } else { _stopLogsTimer(); }
   if (view === 'board') {
     renderBoard();
@@ -14663,6 +14789,182 @@ async function pullFromRemote(btn) {
 </script>
 
 <script>
+// ── Notes tab ─────────────────────────────────────────────────────────────────
+let _notesList = [];
+let _notesActive = null; // { path, title, body }
+let _notesSaveTimer = null;
+let _notesAllNotes = [];
+
+async function _notesLoad() {
+  const r = await fetch(API + '/api/notes');
+  _notesAllNotes = await r.json();
+  _notesRenderList(_notesAllNotes);
+  if (!_notesActive && _notesAllNotes.length === 0) {
+    _notesShowEmpty();
+  } else if (!_notesActive && _notesAllNotes.length > 0) {
+    await _notesOpen(_notesAllNotes[0].path);
+  }
+}
+
+function _notesRenderList(notes) {
+  const el = document.getElementById('notes-list');
+  if (!notes.length) {
+    el.innerHTML = '<div class="notes-list-empty">No notes yet</div>';
+    return;
+  }
+  el.innerHTML = notes.map(n => {
+    const active = _notesActive && _notesActive.path === n.path ? ' active' : '';
+    const dt = n.updated ? new Date(n.updated * 1000).toLocaleDateString() : '';
+    const displayName = n.name || n.path.replace(/\.md$/, '');
+    return `<div class="notes-list-item${active}" onclick="_notesOpen(${JSON.stringify(n.path)})">
+      <div class="nli-title">${esc(displayName)}</div>
+      <div class="nli-date">${dt}</div>
+    </div>`;
+  }).join('');
+}
+
+function _notesSearchFilter(q) {
+  if (!q.trim()) { _notesRenderList(_notesAllNotes); return; }
+  const lq = q.toLowerCase();
+  _notesRenderList(_notesAllNotes.filter(n =>
+    n.name.toLowerCase().includes(lq) || n.path.toLowerCase().includes(lq)
+  ));
+}
+
+async function _notesOpen(path) {
+  const r = await fetch(API + '/api/notes/' + encodeURIComponent(path.replace(/\.md$/, '')));
+  if (!r.ok) return;
+  const data = await r.json();
+  _notesActive = { path: data.path, body: data.content };
+  const titleFromContent = (data.content.match(/^#\s+(.+)$/m) || [])[1] || '';
+  const titleFromPath = path.replace(/\.md$/, '').split('/').pop();
+  _notesActive.title = titleFromContent || titleFromPath;
+  document.getElementById('notes-title').value = _notesActive.title;
+  document.getElementById('notes-body').value = data.content;
+  document.getElementById('notes-empty-state').style.display = 'none';
+  document.getElementById('notes-edit-area').style.display = 'flex';
+  _notesSetTab('edit');
+  _notesRenderList(_notesAllNotes);
+}
+
+async function _notesNew() {
+  const ts = Date.now();
+  const path = `note-${ts}.md`;
+  const content = '';
+  await fetch(API + '/api/notes/' + path.replace(/\.md$/, ''), {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ content })
+  });
+  await _notesLoad();
+  await _notesOpen(path);
+  document.getElementById('notes-title').focus();
+}
+
+function _notesTitleChange() {
+  if (!_notesActive) return;
+  _notesActive.title = document.getElementById('notes-title').value;
+  _notesSaveDebounce();
+}
+
+function _notesSaveDebounce() {
+  if (_notesSaveTimer) clearTimeout(_notesSaveTimer);
+  document.getElementById('notes-save-status').textContent = 'Saving…';
+  _notesSaveTimer = setTimeout(_notesSave, 1200);
+}
+
+async function _notesSave() {
+  if (!_notesActive) return;
+  let body = document.getElementById('notes-body').value;
+  const title = document.getElementById('notes-title').value.trim();
+  // Keep/sync first heading to title
+  if (title) {
+    if (/^#\s+.+/m.test(body)) {
+      body = body.replace(/^#\s+.+/m, '# ' + title);
+    } else {
+      body = '# ' + title + '\n\n' + body;
+    }
+    document.getElementById('notes-body').value = body;
+  }
+  const pathKey = _notesActive.path.replace(/\.md$/, '');
+  await fetch(API + '/api/notes/' + encodeURIComponent(pathKey), {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ content: body })
+  });
+  document.getElementById('notes-save-status').textContent = 'Saved';
+  setTimeout(() => { document.getElementById('notes-save-status').textContent = ''; }, 2000);
+  // Refresh list to update timestamps
+  const r = await fetch(API + '/api/notes');
+  _notesAllNotes = await r.json();
+  _notesRenderList(_notesAllNotes);
+}
+
+async function _notesDelete() {
+  if (!_notesActive) return;
+  const pathKey = _notesActive.path.replace(/\.md$/, '');
+  await fetch(API + '/api/notes/' + encodeURIComponent(pathKey), { method: 'DELETE' });
+  _notesActive = null;
+  _notesShowEmpty();
+  await _notesLoad();
+}
+
+function _notesShowEmpty() {
+  document.getElementById('notes-empty-state').style.display = 'flex';
+  document.getElementById('notes-edit-area').style.display = 'none';
+  document.getElementById('notes-preview-area').style.display = 'none';
+  document.getElementById('notes-title').value = '';
+  document.getElementById('notes-body').value = '';
+}
+
+function _notesSetTab(tab) {
+  document.getElementById('notes-tab-edit').classList.toggle('active', tab === 'edit');
+  document.getElementById('notes-tab-preview').classList.toggle('active', tab === 'preview');
+  document.getElementById('notes-edit-area').style.display = tab === 'edit' ? 'flex' : 'none';
+  document.getElementById('notes-preview-area').style.display = tab === 'preview' ? '' : 'none';
+  if (tab === 'preview') {
+    const body = document.getElementById('notes-body').value;
+    document.getElementById('notes-preview-area').innerHTML = _notesMarkdown(body);
+  }
+}
+
+function _notesMarkdown(md) {
+  // Minimal safe markdown renderer
+  let html = esc(md);
+  // Code blocks
+  html = html.replace(/```[\s\S]*?```/g, m => {
+    const inner = m.slice(3, -3).replace(/^[^\n]*\n?/, '');
+    return `<pre><code>${inner}</code></pre>`;
+  });
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Headers
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+  // Bold/italic
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  // Blockquote
+  html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+  // HR
+  html = html.replace(/^---+$/gm, '<hr>');
+  // Links
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  // Lists
+  html = html.replace(/^\* (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/(<li>.*<\/li>\n?)+/g, m => `<ul>${m}</ul>`);
+  // Paragraphs
+  html = html.replace(/\n\n+/g, '</p><p>');
+  html = '<p>' + html + '</p>';
+  html = html.replace(/<p>(<h[123]>|<ul>|<\/ul>|<pre>|<blockquote>|<hr>)/g, '$1');
+  html = html.replace(/(<\/h[123]>|<\/ul>|<\/pre>|<\/blockquote>|<hr>)<\/p>/g, '$1');
+  html = html.replace(/<p><\/p>/g, '');
+  // Newlines → <br> inside paragraphs
+  html = html.replace(/\n/g, '<br>');
+  return html;
+}
+
 // ── Email Events tab ──────────────────────────────────────────────────────────
 let _emailEvents = [];
 
@@ -15234,6 +15536,38 @@ class CCHandler(BaseHTTPRequestHandler):
                         wd = _session_work_dir(sname)
                         if wd:
                             _write_claude_memory(sname, wd)
+                return self._json({"ok": True})
+
+        # Notes API (/api/notes)
+        if method == "GET" and path == "/api/notes":
+            notes = []
+            if CC_NOTES.exists():
+                for f in sorted(CC_NOTES.rglob("*.md"), key=lambda p: -p.stat().st_mtime):
+                    rel = str(f.relative_to(CC_NOTES))
+                    stat = f.stat()
+                    notes.append({"path": rel, "name": f.stem, "size": stat.st_size, "updated": int(stat.st_mtime)})
+            return self._json(notes)
+
+        if path.startswith("/api/notes/"):
+            note_rel = path[len("/api/notes/"):]
+            if ".." in note_rel or note_rel.startswith("/"):
+                return self._json({"error": "invalid path"}, 400)
+            if not note_rel.endswith(".md"):
+                note_rel += ".md"
+            note_path = CC_NOTES / note_rel
+            if method == "GET":
+                if note_path.exists():
+                    return self._json({"content": note_path.read_text(errors="replace"), "path": note_rel})
+                return self._json({"error": "not found"}, 404)
+            if method == "POST":
+                body = self._read_body()
+                content = body.get("content", "")
+                note_path.parent.mkdir(parents=True, exist_ok=True)
+                note_path.write_text(content)
+                return self._json({"ok": True, "path": note_rel})
+            if method == "DELETE":
+                if note_path.exists():
+                    note_path.unlink()
                 return self._json({"ok": True})
 
         # GET /api/skills — list skills from shared library (~/.amux/skills/)
