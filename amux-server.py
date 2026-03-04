@@ -14859,7 +14859,9 @@ function _notesInitQuill() {
     },
     placeholder: 'Write your note…'
   });
-  _quill.on('text-change', () => _notesSaveDebounce());
+  _quill.on('text-change', (delta, old, source) => {
+    if (source !== 'api') _notesSaveDebounce();
+  });
 }
 
 async function _notesLoad() {
@@ -14931,7 +14933,7 @@ async function _notesOpen(path) {
 async function _notesNew() {
   const ts = Date.now();
   const path = `note-${ts}.md`;
-  await fetch(API + '/api/notes/' + path.replace(/\.md$/, ''), {
+  await apiCall(API + '/api/notes/' + path.replace(/\.md$/, ''), {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ content: '' })
   });
@@ -14944,6 +14946,18 @@ function _notesTitleChange() {
   if (!_notesActive) return;
   const newTitle = document.getElementById('notes-title').value;
   _notesActive.title = newTitle;
+  // Sync title into Quill as H1 (source=api so text-change won't re-trigger debounce)
+  if (_quill) {
+    const root = _quill.root;
+    const first = root.firstElementChild;
+    if (first && first.tagName === 'H1') {
+      if (first.textContent !== newTitle) first.textContent = newTitle;
+    } else if (newTitle) {
+      const h1 = document.createElement('h1');
+      h1.textContent = newTitle;
+      root.insertBefore(h1, root.firstChild);
+    }
+  }
   // Update sidebar immediately
   const activeEl = document.querySelector('#notes-list .notes-list-item.active');
   if (activeEl) {
@@ -14963,9 +14977,22 @@ function _notesSaveDebounce() {
 
 async function _notesSave() {
   if (!_notesActive || !_quill) return;
+  // Ensure title is reflected as H1 in content before saving
+  const title = document.getElementById('notes-title').value.trim();
+  if (title && _quill) {
+    const root = _quill.root;
+    const first = root.firstElementChild;
+    if (first && first.tagName === 'H1') {
+      if (first.textContent !== title) first.textContent = title;
+    } else {
+      const h1 = document.createElement('h1');
+      h1.textContent = title;
+      root.insertBefore(h1, root.firstChild);
+    }
+  }
   const content = _quill.root.innerHTML === '<p><br></p>' ? '' : _quill.root.innerHTML;
   const pathKey = _notesActive.path.replace(/\.md$/, '');
-  await fetch(API + '/api/notes/' + encodeURIComponent(pathKey), {
+  await apiCall(API + '/api/notes/' + encodeURIComponent(pathKey), {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ content })
   });
@@ -14973,6 +15000,7 @@ async function _notesSave() {
   setTimeout(() => { document.getElementById('notes-save-status').textContent = ''; }, 2000);
   // Refresh list to update timestamps
   const r = await fetch(API + '/api/notes');
+  if (!r.ok) return;
   _notesAllNotes = await r.json();
   // Re-apply current note's known title before re-rendering
   if (_notesActive) {
@@ -14985,7 +15013,7 @@ async function _notesSave() {
 async function _notesDelete() {
   if (!_notesActive) return;
   const pathKey = _notesActive.path.replace(/\.md$/, '');
-  await fetch(API + '/api/notes/' + encodeURIComponent(pathKey), { method: 'DELETE' });
+  await apiCall(API + '/api/notes/' + encodeURIComponent(pathKey), { method: 'DELETE' });
   _notesActive = null;
   _notesShowEmpty();
   await _notesLoad();
@@ -14999,7 +15027,8 @@ function _notesShowEmpty() {
 }
 
 async function _notesTogglePin(path) {
-  const r = await fetch(API + '/api/notes/' + encodeURIComponent(path.replace(/\.md$/, '')) + '/pin', { method: 'POST' });
+  const r = await apiCall(API + '/api/notes/' + encodeURIComponent(path.replace(/\.md$/, '')) + '/pin', { method: 'POST' });
+  if (!r) return;
   const d = await r.json();
   const entry = _notesAllNotes.find(n => n.path === path);
   if (entry) entry.pinned = d.pinned;
