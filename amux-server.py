@@ -5398,8 +5398,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   @media (min-width: 769px) { #tab-grid { display: block; } }
 
   /* Notes view */
-  #notes-view { display:none; flex:1; overflow:hidden; flex-direction:row; }
-  #notes-view.active { display:flex; }
   .notes-sidebar {
     width: 220px; min-width: 160px; border-right: 1px solid var(--border);
     display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0;
@@ -5908,7 +5906,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 </div>
 
 <!-- Notes view -->
-<div id="notes-view" style="display:none;flex:1;overflow:hidden;display:none;flex-direction:row;">
+<div id="notes-view" style="display:none;flex-direction:row;height:calc(100vh - 110px);overflow:hidden;">
   <!-- Sidebar -->
   <div class="notes-sidebar" id="notes-sidebar">
     <div class="notes-sidebar-header">
@@ -11595,7 +11593,7 @@ function switchView(view) {
   document.getElementById('browser-view').style.display = view === 'browser' ? 'flex' : 'none';
   document.getElementById('logs-view').style.display = view === 'logs' ? 'flex' : 'none';
   document.getElementById('email-view').style.display = view === 'email' ? '' : 'none';
-  document.getElementById('notes-view').classList.toggle('active', view === 'notes');
+  document.getElementById('notes-view').style.display = view === 'notes' ? 'flex' : 'none';
   document.getElementById('tab-sessions').classList.toggle('active', view === 'sessions');
   document.getElementById('tab-board').classList.toggle('active', view === 'board');
   document.getElementById('tab-calendar').classList.toggle('active', view === 'calendar');
