@@ -15011,7 +15011,9 @@ function _notesRenderList(notes) {
     const active = _notesActive && _notesActive.path === n.path ? ' active' : '';
     const pinned = n.pinned ? ' pinned' : '';
     const dt = n.updated ? new Date(n.updated * 1000).toLocaleDateString() : '';
-    const displayName = n.name || n.path.replace(/\.md$/, '');
+    const stem = n.path.replace(/\.md$/, '').split('/').pop();
+    const rawName = n.name || stem;
+    const displayName = /^note-\d+$/.test(rawName) ? 'Untitled' : rawName;
     return `<div class="notes-list-item${active}${pinned}" data-path="${esc(n.path)}" onclick="_notesOpen(this.dataset.path)">
       <div class="nli-title">${esc(displayName)}</div>
       <div class="nli-date">${dt}</div>
@@ -15069,6 +15071,8 @@ async function _notesOpen(path) {
 }
 
 async function _notesNew() {
+  // Flush any pending save before creating a new note (preserves current note's title)
+  if (_notesSaveTimer) { clearTimeout(_notesSaveTimer); _notesSaveTimer = null; await _notesSave(); }
   // Pick unique "Untitled" / "Untitled 1" / "Untitled 2" filename
   const existing = new Set(_notesAllNotes.map(n => n.path));
   let filename = 'untitled.md';
@@ -15083,7 +15087,9 @@ async function _notesNew() {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ content: `<h1>${displayName}</h1>` })
   });
-  await _notesLoad();
+  // Insert at top of list without re-fetching (avoids server re-sort resetting other titles)
+  _notesAllNotes.unshift({ path: filename, name: displayName, updated: Math.floor(Date.now() / 1000), pinned: false, size: 0 });
+  _notesRenderList(_notesAllNotes);
   await _notesOpen(filename);
   const titleEl = document.getElementById('notes-title');
   titleEl.focus();
