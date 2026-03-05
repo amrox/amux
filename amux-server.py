@@ -11745,7 +11745,7 @@ function switchView(view) {
   if (view === 'reports') fetchReports();
   if (view === 'browser') _rbLoadProfiles();
   if (view === 'email') _emailLoad();
-  if (view === 'notes') { _notesInitQuill(); _notesApplySidebarState(); _notesLoad(); }
+  if (view === 'notes') { _notesInitQuill(); _notesApplySidebarState(); if (!_notesAllNotes.length) _notesLoad(); else _notesRenderList(_notesAllNotes); }
   if (view === 'logs') { fetchLogs(); _startLogsTimer(); } else { _stopLogsTimer(); }
   if (view === 'board') {
     renderBoard();
@@ -14992,7 +14992,13 @@ function _notesInitQuill() {
 
 async function _notesLoad() {
   const r = await fetch(API + '/api/notes');
-  _notesAllNotes = await r.json();
+  const fresh = await r.json();
+  // Preserve local titles — client may be ahead of server (unsaved debounce)
+  if (_notesAllNotes.length) {
+    const localTitles = new Map(_notesAllNotes.map(n => [n.path, n.name]));
+    for (const n of fresh) { if (localTitles.has(n.path)) n.name = localTitles.get(n.path); }
+  }
+  _notesAllNotes = fresh;
   _notesRenderList(_notesAllNotes);
   if (!_notesActive && _notesAllNotes.length === 0) {
     _notesShowEmpty();
