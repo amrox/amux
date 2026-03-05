@@ -1579,6 +1579,11 @@ CREATE TABLE IF NOT EXISTS org_invites (
     used_at    INTEGER,
     used_by    TEXT
 );
+CREATE TABLE IF NOT EXISTS skills (
+    name       TEXT PRIMARY KEY,
+    content    TEXT NOT NULL DEFAULT '',
+    updated    INTEGER NOT NULL DEFAULT 0
+);
 """
 
 
@@ -1683,6 +1688,19 @@ def _init_db():
             db.commit()
         except Exception:
             pass  # column already exists
+    # One-time migration: import existing flat skill files into SQLite
+    skills_dir = CC_HOME / "skills"
+    if skills_dir.exists():
+        for f in skills_dir.glob("*.md"):
+            try:
+                content = f.read_text(errors="replace")
+                db.execute(
+                    "INSERT OR IGNORE INTO skills(name, content, updated) VALUES(?,?,?)",
+                    (f.stem, content, int(f.stat().st_mtime)),
+                )
+            except Exception:
+                pass
+        db.commit()
 
 
 def _load_board_raw() -> dict:
@@ -5891,6 +5909,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <input id="board-search" class="search-input" type="text" placeholder="Search board..." oninput="boardSearchQuery=this.value.toLowerCase();renderBoard()">
       <button class="search-clear" onclick="document.getElementById('board-search').value='';boardSearchQuery='';renderBoard()">&#x2715;</button>
     </div>
+    <button class="btn primary" onclick="openBoardAdd('todo')" style="font-size:0.8rem;padding:5px 12px;white-space:nowrap;flex-shrink:0;">+ New issue</button>
     <div class="board-view-toggle">
       <button id="bv-session" class="bv-btn" onclick="setBoardView('session')" title="Group by session">&#x25A4;</button>
       <button id="bv-status" class="bv-btn" onclick="setBoardView('status')" title="Group by status">&#x2630;</button>
@@ -16222,27 +16241,24 @@ class CCHandler(BaseHTTPRequestHandler):
                     note_path.rename(dest)
                 return self._json({"ok": True})
 
-        # GET /api/skills — list skills from shared library (~/.amux/skills/)
+        # GET /api/skills — list skills from SQLite
         if method == "GET" and path == "/api/skills":
+            db = get_db()
+            rows = db.execute("SELECT name, content FROM skills ORDER BY name").fetchall()
             skills = []
-            skills_dir = CC_HOME / "skills"
-            skills_dir.mkdir(parents=True, exist_ok=True)
-            for f in sorted(skills_dir.glob("*.md")):
-                try:
-                    text = f.read_text(errors="replace")
-                    desc, hint = "", ""
-                    if text.startswith("---"):
-                        fm_end = text.find("---", 3)
-                        if fm_end > 0:
-                            fm = text[3:fm_end]
-                            for line in fm.splitlines():
-                                if line.startswith("description:"):
-                                    desc = line.split(":", 1)[1].strip()
-                                elif line.startswith("argument-hint:"):
-                                    hint = line.split(":", 1)[1].strip()
-                    skills.append({"name": f.stem, "description": desc, "hint": hint})
-                except Exception:
-                    pass
+            for row in rows:
+                text = row["content"]
+                desc, hint = "", ""
+                if text.startswith("---"):
+                    fm_end = text.find("---", 3)
+                    if fm_end > 0:
+                        fm = text[3:fm_end]
+                        for line in fm.splitlines():
+                            if line.startswith("description:"):
+                                desc = line.split(":", 1)[1].strip()
+                            elif line.startswith("argument-hint:"):
+                                hint = line.split(":", 1)[1].strip()
+                skills.append({"name": row["name"], "description": desc, "hint": hint})
             return self._json(skills)
 
         # GET /api/skills/<name> — get full skill content
@@ -16250,10 +16266,11 @@ class CCHandler(BaseHTTPRequestHandler):
             name = path.split("/api/skills/", 1)[1]
             if not name or "/" in name:
                 return self._json({"error": "invalid name"}, 400)
-            f = CC_HOME / "skills" / (name + ".md")
-            if not f.exists():
+            db = get_db()
+            row = db.execute("SELECT content FROM skills WHERE name=?", (name,)).fetchone()
+            if not row:
                 return self._json({"error": "not found"}, 404)
-            return self._json({"name": name, "content": f.read_text(errors="replace")})
+            return self._json({"name": name, "content": row["content"]})
 
         # POST /api/skills/<name> — create or update a skill
         if method == "POST" and path.startswith("/api/skills/"):
@@ -16264,9 +16281,20 @@ class CCHandler(BaseHTTPRequestHandler):
             content = body.get("content", "")
             if not content.strip():
                 return self._json({"error": "content required"}, 400)
-            skills_dir = CC_HOME / "skills"
-            skills_dir.mkdir(parents=True, exist_ok=True)
-            (skills_dir / (name + ".md")).write_text(content)
+            db = get_db()
+            db.execute(
+                "INSERT INTO skills(name, content, updated) VALUES(?,?,?)"
+                " ON CONFLICT(name) DO UPDATE SET content=excluded.content, updated=excluded.updated",
+                (name, content, int(time.time())),
+            )
+            db.commit()
+            # Also write flat file for any local tooling that reads ~/.amux/skills/
+            try:
+                skills_dir = CC_HOME / "skills"
+                skills_dir.mkdir(parents=True, exist_ok=True)
+                (skills_dir / (name + ".md")).write_text(content)
+            except Exception:
+                pass
             return self._json({"ok": True, "name": name})
 
         # DELETE /api/skills/<name> — delete a skill
@@ -16274,9 +16302,15 @@ class CCHandler(BaseHTTPRequestHandler):
             name = path.split("/api/skills/", 1)[1]
             if not name or "/" in name:
                 return self._json({"error": "invalid name"}, 400)
-            f = CC_HOME / "skills" / (name + ".md")
-            if f.exists():
-                f.unlink()
+            db = get_db()
+            db.execute("DELETE FROM skills WHERE name=?", (name,))
+            db.commit()
+            try:
+                f = CC_HOME / "skills" / (name + ".md")
+                if f.exists():
+                    f.unlink()
+            except Exception:
+                pass
             return self._json({"ok": True})
 
         # GET /api/prefs — read all prefs (or ?key=X for one)
