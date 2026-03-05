@@ -4304,42 +4304,41 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .csv-table th,.csv-table td { border:1px solid var(--border);padding:4px 10px;text-align:left;white-space:nowrap; }
   .csv-table th { background:var(--card);font-weight:600;position:sticky;top:0;z-index:1; }
   .csv-table tr:nth-child(even) td { background:rgba(255,255,255,0.02); }
-  .file-overlay-body.markdown { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 0.88rem; }
-  .file-overlay-body.markdown h1, .file-overlay-body.markdown h2, .file-overlay-body.markdown h3 { margin: 16px 0 8px 0; font-weight: 700; }
-  .file-overlay-body.markdown h1 { font-size: 1.3rem; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
-  .file-overlay-body.markdown h2 { font-size: 1.1rem; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
-  .file-overlay-body.markdown h3 { font-size: 0.95rem; }
-  .file-overlay-body.markdown p { margin: 8px 0; }
-  .file-overlay-body.markdown code { background: rgba(88,166,255,0.1); padding: 2px 5px; border-radius: 3px; font-family: "SF Mono", "Fira Code", monospace; font-size: 0.82rem; }
-  .file-overlay-body.markdown pre { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 8px 0; }
-  .file-overlay-body.markdown pre code { background: none; padding: 0; }
-  .file-overlay-body.markdown ul, .file-overlay-body.markdown ol { padding-left: 20px; margin: 8px 0; }
-  .file-overlay-body.markdown li { margin: 4px 0; }
-  .file-overlay-body.markdown a { color: var(--accent); }
-  .file-overlay-body.markdown blockquote { border-left: 3px solid var(--border); padding-left: 12px; color: var(--dim); margin: 8px 0; }
-  .file-overlay-body.markdown strong { font-weight: 700; }
-  .file-overlay-body.markdown em { font-style: italic; }
-  .file-overlay-body.markdown hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
-  .file-overlay-body.markdown .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 12px 0; border-radius: 6px; border: 1px solid var(--border); }
-  .file-overlay-body.markdown table { border-collapse: collapse; min-width: 100%; margin: 0; font-size: 0.84rem; }
-  .file-overlay-body.markdown thead { background: var(--card); }
-  .file-overlay-body.markdown th { font-weight: 600; text-align: left; padding: 8px 12px; border: 1px solid var(--border); white-space: nowrap; }
-  .file-overlay-body.markdown td { padding: 6px 12px; border: 1px solid var(--border); }
-  .file-overlay-body.markdown tbody tr:nth-child(even) { background: rgba(88,166,255,0.04); }
-  .file-overlay-body.markdown tbody tr:hover { background: rgba(88,166,255,0.08); }
+  /* Unified markdown content styling — used everywhere renderMarkdown() output appears */
+  .md-content { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 0.88rem; line-height: 1.6; }
+  .md-content > *:first-child { margin-top: 0 !important; }
+  .md-content > *:last-child { margin-bottom: 0 !important; }
+  .md-content p { margin: 0 0 10px; }
+  .md-content h1 { font-size: 1.25rem; font-weight: 700; margin: 16px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+  .md-content h2 { font-size: 1.05rem; font-weight: 700; margin: 14px 0 6px; padding-bottom: 3px; border-bottom: 1px solid var(--border); }
+  .md-content h3 { font-size: 0.95rem; font-weight: 700; margin: 12px 0 5px; }
+  .md-content h4, .md-content h5, .md-content h6 { font-weight: 700; margin: 10px 0 4px; }
+  .md-content ul, .md-content ol { padding-left: 1.5em; margin: 0 0 10px; }
+  .md-content li { margin-bottom: 3px; }
+  .md-content li > p { margin-bottom: 4px; }
+  .md-content code { font-family: "SF Mono","Fira Code",monospace; font-size: 0.85em; background: rgba(88,166,255,0.1); padding: 1px 5px; border-radius: 4px; }
+  .md-content pre { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; overflow-x: auto; margin: 0 0 10px; }
+  .md-content pre code { background: none; padding: 0; font-size: 0.9em; }
+  .md-content blockquote { border-left: 3px solid var(--border); margin: 0 0 10px; padding: 2px 12px; color: var(--dim); }
+  .md-content hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+  .md-content a { color: var(--accent); text-decoration: underline; }
+  .md-content strong { font-weight: 700; }
+  .md-content em { font-style: italic; }
+  .md-content del { color: var(--dim); text-decoration: line-through; }
+  .md-content img { max-width: 100%; border-radius: 6px; margin: 6px 0; display: block; }
+  .md-content input[type="checkbox"] { margin-right: 5px; pointer-events: none; vertical-align: middle; }
+  .md-content .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 0 10px; border-radius: 6px; border: 1px solid var(--border); }
+  .md-content table { border-collapse: collapse; min-width: 100%; font-size: 0.85em; }
+  .md-content thead { background: var(--card); }
+  .md-content th { font-weight: 600; text-align: left; padding: 6px 10px; border: 1px solid var(--border); white-space: nowrap; }
+  .md-content td { padding: 5px 10px; border: 1px solid var(--border); }
+  .md-content tbody tr:nth-child(even) { background: rgba(88,166,255,0.04); }
+  .md-content tbody tr:hover { background: rgba(88,166,255,0.08); }
   @media (max-width: 600px) {
-    .file-overlay-body.markdown th, .file-overlay-body.markdown td { padding: 5px 8px; font-size: 0.78rem; }
-    .board-detail-preview th, .peek-memory-editor th, .board-detail-preview td, .peek-memory-editor td { padding: 4px 8px; font-size: 0.78rem; }
+    .md-content th, .md-content td { padding: 4px 7px; font-size: 0.8em; }
   }
-  .file-overlay-body.markdown img { max-width: 100%; border-radius: 6px; margin: 8px 0; }
-  .file-overlay-body.markdown input[type="checkbox"] { margin-right: 6px; pointer-events: none; }
-  .file-overlay-body.markdown del { color: var(--dim); }
-  /* Board/memory markdown preview tables */
-  .board-detail-preview .table-scroll, .peek-memory-editor .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 10px 0; border-radius: 6px; border: 1px solid var(--border); }
-  .board-detail-preview table, .peek-memory-editor table { border-collapse: collapse; min-width: 100%; margin: 0; font-size: 0.84rem; }
-  .board-detail-preview th, .peek-memory-editor th { font-weight: 600; text-align: left; padding: 6px 10px; border: 1px solid var(--border); background: var(--card); }
-  .board-detail-preview td, .peek-memory-editor td { padding: 5px 10px; border: 1px solid var(--border); }
-  .board-detail-preview tbody tr:nth-child(even), .peek-memory-editor tbody tr:nth-child(even) { background: rgba(88,166,255,0.04); }
+  /* File overlay markdown: slightly larger font for full-width reading */
+  .file-overlay-body.markdown.md-content { font-size: 0.92rem; }
 
   /* File explorer */
   .explore-breadcrumb { font-size: 0.8rem; overflow-x: auto; white-space: nowrap; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
@@ -5533,19 +5532,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     font-family: inherit; line-height: 1.65; resize: none; box-sizing: border-box;
   }
   .board-detail-desc-input::placeholder { color: var(--dim); }
-  .board-detail-preview { min-height: 200px; font-size: 0.92rem; line-height: 1.65; color: var(--text); padding: 10px 0; }
-  .board-detail-preview h1{font-size:1.2rem;font-weight:700;margin:10px 0 5px}
-  .board-detail-preview h2{font-size:1.05rem;font-weight:700;margin:9px 0 4px}
-  .board-detail-preview h3{font-size:0.95rem;font-weight:700;margin:8px 0 4px}
-  .board-detail-preview p{margin:0 0 9px}
-  .board-detail-preview ul,.board-detail-preview ol{margin:0 0 9px;padding-left:20px}
-  .board-detail-preview li{margin-bottom:3px}
-  .board-detail-preview code{font-family:"SF Mono","Fira Code",monospace;font-size:0.85em;background:rgba(255,255,255,0.08);padding:1px 5px;border-radius:4px}
-  .board-detail-preview pre{background:rgba(0,0,0,0.3);border-radius:6px;padding:12px;overflow-x:auto;margin:0 0 9px}
-  .board-detail-preview pre code{background:none;padding:0;font-size:0.82em}
-  .board-detail-preview a{color:var(--accent);text-decoration:underline}
-  .board-detail-preview hr{border:none;border-top:1px solid var(--border);margin:10px 0}
-  .board-detail-preview blockquote{border-left:3px solid var(--border);margin:0 0 9px;padding:2px 12px;color:var(--dim)}
+  .board-detail-preview { min-height: 200px; font-size: 0.92rem; color: var(--text); padding: 10px 0; }
   .board-detail-meta { margin-top: 12px; font-size: 0.78rem; color: var(--dim); border-top: 1px solid var(--border); padding-top: 10px; display: flex; flex-direction: column; gap: 5px; }
   .board-detail-meta-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .board-detail-footer { display: flex; justify-content: space-between; align-items: center; padding-top: 10px; flex-shrink: 0; border-top: 1px solid var(--border); }
@@ -6530,7 +6517,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <button class="board-detail-tab" id="bd-tab-preview" onclick="boardDetailTab('preview')">Preview</button>
     </div>
     <textarea id="bd-desc" class="board-detail-desc-input" placeholder="Add notes, description, or context... (supports Markdown)"></textarea>
-    <div id="bd-preview" class="board-detail-preview" style="display:none;"></div>
+    <div id="bd-preview" class="board-detail-preview md-content" style="display:none;"></div>
     <div class="board-detail-meta" id="bd-meta"></div>
   </div>
   <div class="board-detail-footer">
@@ -6711,7 +6698,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     </div>
     <textarea id="peek-memory-input" class="peek-memory-textarea"
       placeholder="No memory yet. Add notes, context, or conventions that Claude should always remember for this session..."></textarea>
-    <div id="peek-memory-preview" class="board-detail-preview" style="display:none;flex:1;overflow-y:auto;min-height:0;"></div>
+    <div id="peek-memory-preview" class="board-detail-preview md-content" style="display:none;flex:1;overflow-y:auto;min-height:0;"></div>
     <textarea id="peek-global-input" class="peek-memory-textarea" style="display:none;"
       placeholder="Global memory — applied to ALL sessions. Add conventions, tools, or preferences shared across all your sessions..."></textarea>
   </div>
@@ -10092,7 +10079,7 @@ function _renderFileBody(data, mode) {
     body.className = 'file-overlay-body file-csv';
     body.innerHTML = renderCsvTable(data.content);
   } else if (data.is_markdown) {
-    body.className = 'file-overlay-body markdown';
+    body.className = 'file-overlay-body markdown md-content';
     body.innerHTML = renderMarkdown(data.content);
   } else {
     // plain text, html source, etc. — preview = same as raw
@@ -12736,7 +12723,7 @@ function renderMarkdown(raw) {
   // Use marked.js for full GFM support (tables, task lists, strikethrough, etc.)
   if (typeof marked !== 'undefined') {
     try {
-      let html = marked.parse(raw, { gfm: true, breaks: true });
+      let html = marked.parse(raw, { gfm: true, breaks: false });
       html = html.replace(/<table>/g, '<div class="table-scroll"><table>').replace(/<\/table>/g, '</table></div>');
       return html;
     } catch(e) { /* fall through to basic renderer */ }
