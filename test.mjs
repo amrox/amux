@@ -650,6 +650,16 @@ async function testAPI() {
     log('Session object has name field', typeof s.name === 'string', s.name);
     log('Session object has running field', typeof s.running === 'boolean', `${s.name}.running=${s.running}`);
     log('Session object has dir field', 'dir' in s);
+
+    // Peek API — verify tmux capture-pane works (catches =prefix regressions)
+    const running = sessions.find(x => x.running);
+    if (running) {
+      const rPeek = await api.get(`/api/sessions/${running.name}/peek?lines=10`);
+      const peekData = await rPeek.json();
+      log('GET /api/sessions/<name>/peek returns output',
+        typeof peekData.output === 'string' && peekData.output.length > 0,
+        `${peekData.output.length} chars`);
+    }
   }
 
   // ── Session memory API ─────────────────────────────────────────────────────
