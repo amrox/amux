@@ -4338,6 +4338,84 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     opacity: 0.4; transition: opacity 0.15s; }
   .explore-row:hover .explore-menu-btn, .explore-menu-btn:focus { opacity: 1; }
   #files-body.files-drop-active { outline: 2px dashed var(--accent); outline-offset: -4px; background: color-mix(in srgb, var(--accent) 6%, var(--bg)); }
+  /* File explorer redesign */
+  .fe-toolbar {
+    display: flex; align-items: center; gap: 4px; padding: 6px 10px;
+    border-bottom: 1px solid var(--border); flex-shrink: 0; background: var(--card);
+  }
+  .fe-tb-btn {
+    background: none; border: 1px solid var(--border); border-radius: 5px;
+    color: var(--dim); cursor: pointer; padding: 4px 7px; font-size: 0.75rem;
+    line-height: 1; flex-shrink: 0; transition: background 0.12s, color 0.12s;
+    display: flex; align-items: center; gap: 3px;
+  }
+  .fe-tb-btn:hover { background: var(--hover); color: var(--text); }
+  .fe-tb-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .fe-breadcrumb {
+    flex: 1; font-size: 0.8rem; font-family: 'SF Mono','Fira Code',monospace;
+    overflow-x: auto; white-space: nowrap; padding: 3px 6px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 5px;
+    min-width: 0; scrollbar-width: none;
+  }
+  .fe-breadcrumb::-webkit-scrollbar { display: none; }
+  .fe-crumb { color: var(--accent); cursor: pointer; }
+  .fe-crumb:hover { text-decoration: underline; }
+  .fe-crumb-sep { color: var(--dim); margin: 0 2px; }
+  .fe-col-headers {
+    display: grid; grid-template-columns: minmax(0,1fr) 72px 108px 32px;
+    padding: 0 4px; border-bottom: 2px solid var(--border); flex-shrink: 0;
+    background: var(--card);
+  }
+  .fe-col-hdr {
+    padding: 5px 8px; font-size: 0.7rem; font-weight: 600; color: var(--dim);
+    cursor: pointer; user-select: none; display: flex; align-items: center; gap: 3px;
+    transition: color 0.12s;
+  }
+  .fe-col-hdr:hover { color: var(--text); }
+  .fe-col-hdr.sorted { color: var(--accent); }
+  .fe-sort-arrow { font-size: 0.65rem; opacity: 0.7; }
+  .fe-col-hdr-actions { padding: 5px 4px; }
+  .fe-row {
+    display: grid; grid-template-columns: minmax(0,1fr) 72px 108px 32px;
+    padding: 0 4px; border-bottom: 1px solid rgba(139,148,158,0.08);
+    cursor: pointer; transition: background 0.08s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .fe-row:hover { background: var(--hover, rgba(139,148,158,0.07)); }
+  .fe-row:active { background: rgba(88,166,255,0.08); }
+  .fe-row.fe-dir .fe-cell-name { font-weight: 500; }
+  .fe-cell-name {
+    display: flex; align-items: center; gap: 7px; padding: 7px 8px;
+    min-width: 0; overflow: hidden;
+  }
+  .fe-cell-name span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.83rem; }
+  .fe-cell-size { padding: 7px 8px; font-size: 0.72rem; color: var(--dim); display: flex; align-items: center; }
+  .fe-cell-date { padding: 7px 8px; font-size: 0.72rem; color: var(--dim); display: flex; align-items: center; }
+  .fe-cell-actions { padding: 4px 2px; display: flex; align-items: center; justify-content: center; }
+  .fe-menu-btn {
+    background: none; border: none; color: var(--dim); cursor: pointer;
+    font-size: 1rem; padding: 3px 5px; border-radius: 4px; opacity: 0;
+    transition: opacity 0.12s; line-height: 1;
+  }
+  .fe-row:hover .fe-menu-btn, .fe-menu-btn:focus { opacity: 1; }
+  .fe-status {
+    padding: 4px 14px; font-size: 0.7rem; color: var(--dim); flex-shrink: 0;
+    border-top: 1px solid var(--border); background: var(--card);
+  }
+  .fe-back-row {
+    display: grid; grid-template-columns: minmax(0,1fr) 72px 108px 32px;
+    padding: 0 4px; border-bottom: 1px solid rgba(139,148,158,0.08);
+    cursor: pointer;
+  }
+  .fe-back-row:hover { background: var(--hover, rgba(139,148,158,0.07)); }
+  @media (max-width: 600px) {
+    .fe-col-headers { grid-template-columns: minmax(0,1fr) 32px; }
+    .fe-row, .fe-back-row { grid-template-columns: minmax(0,1fr) 32px; }
+    .fe-cell-size, .fe-cell-date, .fe-col-hdr:nth-child(2), .fe-col-hdr:nth-child(3) { display: none; }
+    .fe-cell-name { padding: 10px 8px; }
+    .fe-cell-name span { font-size: 0.9rem; }
+    .fe-menu-btn { opacity: 0.5; font-size: 1.1rem; }
+  }
   .explore-menu-popup { position: fixed; background: var(--card); border: 1px solid var(--border);
     border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.3); z-index: 900; min-width: 140px;
     overflow: hidden; }
@@ -6073,22 +6151,46 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 </div>
 
 <div id="files-view" style="display:none;flex-direction:column;flex:1;min-height:0;">
-  <div style="padding:8px 12px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);flex-shrink:0;">
-    <div id="files-breadcrumb" style="flex:1;font-size:0.82rem;font-family:'SF Mono','Fira Code',monospace;overflow-x:auto;white-space:nowrap;"></div>
-    <button class="btn" id="files-home-btn" onclick="loadFiles(_filesCwd)" style="font-size:0.7rem;padding:2px 8px;" title="Go to working directory">&#x1F3E0;</button>
-    <button class="btn" id="files-setcwd-btn" onclick="setFilesCwd()" style="font-size:0.7rem;padding:2px 8px;" title="Set current directory as working directory">&#x1F4CC; Set CWD</button>
-    <button class="btn" id="files-hidden-btn" onclick="toggleFilesHidden()" style="font-size:0.7rem;padding:2px 8px;" title="Show hidden files">.*</button>
-    <button class="btn" id="files-upload-btn" onclick="triggerFilesUpload()" style="font-size:0.7rem;padding:2px 8px;" title="Upload files to current directory">&#x2191; Upload</button>
+  <!-- Toolbar -->
+  <div class="fe-toolbar">
+    <button class="fe-tb-btn" id="files-up-btn" onclick="loadFiles(_filesLastData?.data?.parent||'/')" title="Go up">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 10V2M2 6l4-4 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <div id="files-breadcrumb" class="fe-breadcrumb"></div>
+    <button class="fe-tb-btn" onclick="loadFiles(_filesCwd)" title="Go to working directory">
+      <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M1 6.5 6.5 1 12 6.5M2.5 5v6.5h3V8.5h2v3h3V5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+    </button>
+    <button class="fe-tb-btn" onclick="setFilesCwd()" title="Set as working directory (CWD)">
+      <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><circle cx="6.5" cy="6.5" r="5" stroke="currentColor" stroke-width="1.4"/><circle cx="6.5" cy="6.5" r="2" fill="currentColor"/></svg>
+    </button>
+    <button class="fe-tb-btn" id="files-hidden-btn" onclick="toggleFilesHidden()" title="Show hidden files">.*</button>
+    <button class="fe-tb-btn" onclick="triggerFilesUpload()" title="Upload files">
+      <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M6.5 9V3M3.5 5.5l3-3 3 3M2 10.5h9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
     <input type="file" id="files-upload-input" multiple style="display:none;" onchange="handleFilesUpload(this.files)">
-    <button class="btn" id="files-cache-btn" onclick="cacheFilesDir(_filesPath)" style="font-size:0.7rem;padding:2px 8px;" title="Cache directory for offline viewing">&#x2601; Cache</button>
-    <span id="files-cache-status" style="font-size:0.7rem;color:var(--dim);white-space:nowrap;"></span>
+    <button class="fe-tb-btn" onclick="cacheFilesDir(_filesPath)" title="Cache for offline">
+      <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M6.5 1v8M4 6.5l2.5 2.5L9 6.5M2 10.5h9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <span id="files-cache-status" style="font-size:0.7rem;color:var(--dim);white-space:nowrap;flex-shrink:0;"></span>
+    <button class="fe-tb-btn" onclick="loadFiles(_filesPath)" title="Refresh">
+      <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M11 6.5A4.5 4.5 0 1 1 8 2.3M11 2v4H7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+    </button>
   </div>
-  <div style="padding:6px 12px;border-bottom:1px solid var(--border);flex-shrink:0;">
-    <input id="files-search" type="search" placeholder="Search files…" autocomplete="off"
-      style="width:100%;background:var(--input,var(--card));border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:0.82rem;color:var(--text);outline:none;"
+  <!-- Search -->
+  <div style="padding:5px 10px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--card);">
+    <input id="files-search" type="search" placeholder="Search in this folder…" autocomplete="off"
+      style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);border-radius:5px;padding:4px 9px;font-size:0.8rem;color:var(--text);outline:none;"
       oninput="_filesSearchFilter(this.value)">
   </div>
-  <div id="files-body" style="flex:1;overflow-y:auto;padding:0;"></div>
+  <!-- Column headers -->
+  <div id="fe-col-headers" class="fe-col-headers" style="display:none;">
+    <div class="fe-col-hdr" id="fe-hdr-name" onclick="_filesSetSort('name')">Name</div>
+    <div class="fe-col-hdr" id="fe-hdr-size" onclick="_filesSetSort('size')">Size</div>
+    <div class="fe-col-hdr" id="fe-hdr-modified" onclick="_filesSetSort('modified')">Modified</div>
+    <div class="fe-col-hdr-actions"></div>
+  </div>
+  <div id="files-body" style="flex:1;overflow-y:auto;"></div>
+  <div id="fe-status" class="fe-status"></div>
 </div>
 
 <div id="logs-view" style="display:none;flex-direction:column;flex:1;min-height:0;">
@@ -10560,6 +10662,66 @@ let _explorePath = '';
 let _exploreShowHidden = false;
 let _exploreLastData = null;  // last loaded dir data (for search re-filter)
 let _filesLastData = null;    // last loaded dir data for Files tab
+let _filesSort = { col: 'name', dir: 1 }; // sort state
+
+function _filesSortEntries(entries) {
+  return [...entries].sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'dir' ? -1 : 1; // dirs always first
+    const { col, dir } = _filesSort;
+    if (col === 'name') return dir * a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+    if (col === 'size') return dir * ((a.size || 0) - (b.size || 0));
+    if (col === 'modified') return dir * ((a.modified || 0) - (b.modified || 0));
+    return 0;
+  });
+}
+
+function _filesSetSort(col) {
+  if (_filesSort.col === col) _filesSort.dir *= -1;
+  else { _filesSort.col = col; _filesSort.dir = 1; }
+  if (_filesLastData) {
+    const { path, data, cacheTs } = _filesLastData;
+    _renderFilesEntries(document.getElementById('files-body'), path, data, cacheTs);
+  }
+}
+
+function _filesUpdateSortHeaders() {
+  const arrow = _filesSort.dir === 1 ? '↑' : '↓';
+  ['name','size','modified'].forEach(col => {
+    const el = document.getElementById('fe-hdr-' + col);
+    if (!el) return;
+    const sorted = _filesSort.col === col;
+    el.classList.toggle('sorted', sorted);
+    const existing = el.querySelector('.fe-sort-arrow');
+    if (existing) existing.remove();
+    if (sorted) {
+      const span = document.createElement('span');
+      span.className = 'fe-sort-arrow';
+      span.textContent = arrow;
+      el.appendChild(span);
+    }
+  });
+}
+
+function _fileTypeIcon(name, type) {
+  if (type === 'dir') {
+    return `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M1 4.5A1.5 1.5 0 0 1 2.5 3h3.172a1 1 0 0 1 .707.293L7.5 4.5H13.5A1.5 1.5 0 0 1 15 6v6a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12V4.5Z" fill="#E8A020"/></svg>`;
+  }
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  const CODE = new Set(['js','ts','jsx','tsx','py','go','rs','java','c','cpp','h','cs','rb','php','swift','sh','bash','zsh','fish']);
+  const DATA = new Set(['json','yaml','yml','toml','xml','csv','sql','graphql']);
+  const IMG  = new Set(['png','jpg','jpeg','gif','svg','webp','ico','bmp','avif']);
+  const DOC  = new Set(['md','txt','rst','log','env']);
+  const ARCH = new Set(['zip','tar','gz','bz2','xz','7z','rar']);
+  const PDF  = new Set(['pdf','doc','docx','xls','xlsx','ppt','pptx']);
+  let color = '#8b949e', opacity = '0.5';
+  if (CODE.has(ext))  { color = '#58a6ff'; opacity = '0.85'; }
+  else if (DATA.has(ext)) { color = '#3fb950'; opacity = '0.85'; }
+  else if (IMG.has(ext))  { color = '#a78bfa'; opacity = '0.85'; }
+  else if (DOC.has(ext))  { color = '#ffa657'; opacity = '0.85'; }
+  else if (ARCH.has(ext)) { color = '#ff7b72'; opacity = '0.85'; }
+  else if (PDF.has(ext))  { color = '#f85149'; opacity = '0.85'; }
+  return `<svg width="13" height="15" viewBox="0 0 13 15" fill="none"><path d="M1 1h7.5L12 4.5V14H1V1Z" fill="${color}" opacity="0.18"/><path d="M1 1h7.5L12 4.5V14H1V1Z" stroke="${color}" stroke-width="1" opacity="${opacity}"/><path d="M8 1v4h4" stroke="${color}" stroke-width="1" fill="none" opacity="${opacity}"/></svg>`;
+}
 // ═══════ FILES TAB (inline directory browser) ═══════
 let _filesPath = '/';
 let _filesCwd = '/';   // saved working directory (persisted on server)
@@ -10602,12 +10764,12 @@ async function loadFiles(path) {
   _updateFilesCwdBtn();
   // Breadcrumb
   const parts = path.split('/').filter(Boolean);
-  let crumbHtml = '<span class="explore-crumb" onclick="loadFiles(\'/\')">/</span>';
+  let crumbHtml = '<span class="fe-crumb" onclick="loadFiles(\'/\')">/</span>';
   let cum = '';
   for (const part of parts) {
     cum += '/' + part;
     const cp = cum;
-    crumbHtml += '<span class="explore-crumb" onclick="loadFiles(\'' + cp.replace(/'/g, "\\'") + '\')"> ' + esc(part) + '</span><span style="color:var(--dim)">/</span>';
+    crumbHtml += '<span class="fe-crumb-sep">›</span><span class="fe-crumb" onclick="loadFiles(\'' + cp.replace(/'/g, "\\'") + '\')">' + esc(part) + '</span>';
   }
   document.getElementById('files-breadcrumb').innerHTML = crumbHtml;
   try {
@@ -10627,44 +10789,80 @@ async function loadFiles(path) {
   }
 }
 function _renderFilesEntries(body, path, data, cacheTs) {
-  _filesLastData = { path, data, cacheTs };  // cache for search re-filter
+  _filesLastData = { path, data, cacheTs };
   body.innerHTML = '';
+
+  // Show/hide column headers and update sort indicators
+  const hdrs = document.getElementById('fe-col-headers');
+  if (hdrs) hdrs.style.display = 'grid';
+  _filesUpdateSortHeaders();
+
   if (cacheTs) {
     const age = Math.round((Date.now() - cacheTs) / 60000);
     const ageStr = age < 60 ? age + 'm ago' : Math.round(age/60) + 'h ago';
-    body.innerHTML = '<div style="padding:4px 12px;font-size:0.7rem;color:var(--dim);background:var(--card);border-bottom:1px solid var(--border);">&#x1F4F5; Offline cache &middot; ' + ageStr + '</div>';
+    const banner = document.createElement('div');
+    banner.style.cssText = 'padding:3px 12px;font-size:0.7rem;color:var(--dim);background:var(--card);border-bottom:1px solid var(--border);';
+    banner.innerHTML = '&#x1F4F5; Offline cache &middot; ' + ageStr;
+    body.appendChild(banner);
   }
+
   const q = (document.getElementById('files-search')?.value || '').toLowerCase();
-  const entries = q ? data.entries.filter(e => e.name.toLowerCase().includes(q)) : data.entries;
+  const rawEntries = q ? data.entries.filter(e => e.name.toLowerCase().includes(q)) : data.entries;
+  const entries = _filesSortEntries(rawEntries);
+
+  // Status bar
+  const statusEl = document.getElementById('fe-status');
+  if (statusEl) {
+    const dirs = entries.filter(e => e.type === 'dir').length;
+    const files = entries.filter(e => e.type !== 'dir').length;
+    const parts = [];
+    if (dirs) parts.push(dirs + (dirs === 1 ? ' folder' : ' folders'));
+    if (files) parts.push(files + (files === 1 ? ' file' : ' files'));
+    statusEl.textContent = q ? `${entries.length} result${entries.length !== 1 ? 's' : ''} for "${q}"` : (parts.join(', ') || 'Empty folder');
+  }
+
+  // ".. up" row
   if (!q && data.parent && data.parent !== data.path) {
     const back = document.createElement('div');
-    back.className = 'explore-row';
-    back.innerHTML = '<span class="explore-icon">&#x2B05;</span><span class="explore-name" style="color:var(--dim)">.. (up)</span>';
+    back.className = 'fe-back-row';
+    back.innerHTML = `<div class="fe-cell-name"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 11 5 7l4-4" stroke="var(--dim)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg><span style="color:var(--dim);font-size:0.83rem;">.. (parent)</span></div><div></div><div></div><div></div>`;
     back.onclick = () => loadFiles(data.parent);
     body.appendChild(back);
   }
+
   if (!entries.length) {
-    const msg = q ? `No results for "${q}"` : 'Empty directory';
-    body.innerHTML += `<div style="padding:16px;color:var(--dim)">${esc(msg)}</div>`;
+    const msg = document.createElement('div');
+    msg.style.cssText = 'padding:20px;color:var(--dim);font-size:0.83rem;text-align:center;';
+    msg.textContent = q ? `No results for "${q}"` : 'Empty folder';
+    body.appendChild(msg);
     return;
   }
+
+  const qRe = q ? new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi') : null;
+  const highlightName = (name) => qRe ? esc(name).replace(qRe, m => `<mark style="background:rgba(99,102,241,0.25);color:inherit;border-radius:2px;">${m}</mark>`) : esc(name);
+
   for (const entry of entries) {
     const entryPath = path.replace(/\/$/, '') + '/' + entry.name;
     const row = document.createElement('div');
-    row.className = 'explore-row';
-    const icon = entry.type === 'dir' ? '&#x1F4C2;' : '&#x1F4C4;';
-    const displayName = entry.name + (entry.type === 'dir' ? '/' : '');
-    const menuBtn = '<button class="explore-menu-btn" title="Options" onclick="event.stopPropagation();_showFilesMenu(\'' + entryPath.replace(/'/g, "\\'") + '\',this,\'' + entry.type + '\')">⋯</button>';
-    const mtime = entry.modified ? '<span class="explore-mtime">' + timeAgo(entry.modified) + '</span>' : '';
-    const nameHtml = q ? esc(displayName).replace(new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'), 'gi'), m => `<mark style="background:var(--accent-muted,rgba(99,102,241,0.25));color:inherit;border-radius:2px;">${m}</mark>`) : esc(displayName);
-    row.innerHTML = '<span class="explore-icon">' + icon + '</span><span class="explore-name">' + nameHtml + '</span><span class="explore-size">' + esc(_fmtSize(entry.size)) + '</span>' + mtime + menuBtn;
-    if (entry.type === 'dir') {
-      row.onclick = () => loadFiles(entryPath);
-    } else {
-      row.onclick = () => openFilePreview(entryPath);
-    }
+    row.className = 'fe-row' + (entry.type === 'dir' ? ' fe-dir' : '');
+
+    const nameHtml = highlightName(entry.name);
+    const icon = _fileTypeIcon(entry.name, entry.type);
+    const slash = entry.type === 'dir' ? '<span style="color:var(--dim)">/</span>' : '';
+    const sizeStr = entry.type === 'dir' ? '' : _fmtSize(entry.size);
+    const dateStr = entry.modified ? timeAgo(entry.modified) : '';
+    const ep = entryPath.replace(/'/g, "\\'");
+
+    row.innerHTML =
+      `<div class="fe-cell-name">${icon}<span>${nameHtml}${slash}</span></div>` +
+      `<div class="fe-cell-size">${sizeStr}</div>` +
+      `<div class="fe-cell-date">${dateStr}</div>` +
+      `<div class="fe-cell-actions"><button class="fe-menu-btn" title="Options" onclick="event.stopPropagation();_showFilesMenu('${ep}',this,'${entry.type}')">⋯</button></div>`;
+
+    row.onclick = entry.type === 'dir' ? () => loadFiles(entryPath) : () => openFilePreview(entryPath);
     body.appendChild(row);
   }
+
   // Drag-and-drop upload
   body.ondragover = e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; body.classList.add('files-drop-active'); };
   body.ondragleave = () => body.classList.remove('files-drop-active');
