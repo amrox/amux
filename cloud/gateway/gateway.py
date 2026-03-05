@@ -243,17 +243,8 @@ def container_healthy(user_id):
     return r.stdout.strip() == "healthy"
 
 def _restore_user_files(user_id):
-    """Restore ~/.amux/ files from R2 if the volume is empty (fresh server / lost volume)."""
+    """Restore ~/.amux/ flat files from R2 on every startup (safe: sync only adds/updates)."""
     vol = f"amux-data-{user_id}"
-    # Quick check: if notes/ has any files, the volume is populated — skip restore
-    check = subprocess.run(
-        ["docker", "run", "--rm", "-v", f"{vol}:/data",
-         "amazon/aws-cli:latest",
-         "sh", "-c", "ls /data/notes/ 2>/dev/null | wc -l"],
-        capture_output=True, text=True)
-    if check.stdout.strip() != "0":
-        return
-    # Volume is empty — restore from R2
     r2_prefix = f"s3://{R2_BUCKET}/users/{user_id}/files/"
     subprocess.run(
         ["docker", "run", "--rm",
@@ -262,7 +253,9 @@ def _restore_user_files(user_id):
          "-e", f"AWS_SECRET_ACCESS_KEY={R2_SECRET_KEY}",
          "amazon/aws-cli:latest",
          "aws", "s3", "sync", r2_prefix, "/root/.amux/",
-         "--endpoint-url", R2_ENDPOINT, "--quiet"],
+         "--endpoint-url", R2_ENDPOINT,
+         "--exclude", "amux.db", "--exclude", "amux.db-shm", "--exclude", "amux.db-wal",
+         "--quiet"],
         capture_output=True)
 
 def start_container(user_id, port):
