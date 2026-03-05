@@ -5413,7 +5413,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .notes-sidebar-actions { display: flex; gap: 4px; align-items: center; }
   .notes-toggle-btn {
     background: transparent; border: none; color: var(--dim); cursor: pointer;
-    font-size: 0.85rem; padding: 2px 5px; border-radius: 4px; line-height: 1;
+    padding: 4px; border-radius: 4px; display: flex; align-items: center; justify-content: center;
   }
   .notes-toggle-btn:hover { background: rgba(139,148,158,0.12); color: var(--text); }
   .notes-new-btn {
@@ -5424,11 +5424,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   /* Expand button shown in editor header when sidebar is collapsed */
   .notes-expand-btn {
     background: transparent; border: none; color: var(--dim); cursor: pointer;
-    font-size: 0.85rem; padding: 2px 6px; border-radius: 4px; line-height: 1;
-    display: none;
+    padding: 4px; border-radius: 4px; display: none;
+    align-items: center; justify-content: center; flex-shrink: 0;
   }
   .notes-expand-btn:hover { background: rgba(139,148,158,0.12); color: var(--text); }
-  #notes-view.sidebar-collapsed .notes-expand-btn { display: inline-block; }
+  #notes-view.sidebar-collapsed .notes-expand-btn { display: flex; }
   .notes-search-wrap { padding: 6px 8px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
   .notes-list { flex: 1; overflow-y: auto; }
   /* Mobile: sidebar overlays full width */
@@ -5443,8 +5443,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       width: 100% !important; transform: translateX(-110%); opacity: 0; pointer-events: none;
     }
     .notes-editor-pane { width: 100%; }
-    .notes-expand-btn { display: inline-block !important; }
-    #notes-view.sidebar-collapsed .notes-expand-btn { display: inline-block; }
+    .notes-expand-btn { display: flex !important; }
+    #notes-view.sidebar-collapsed .notes-expand-btn { display: flex; }
   }
   .notes-list-item {
     padding: 8px 12px; cursor: pointer; border-bottom: 1px solid rgba(139,148,158,0.1);
@@ -5947,7 +5947,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <span style="font-weight:600;font-size:0.85rem;">Notes</span>
       <div class="notes-sidebar-actions">
         <button class="notes-new-btn" onclick="_notesNew()" title="New note">+</button>
-        <button class="notes-toggle-btn" onclick="_notesToggleSidebar()" title="Collapse sidebar">&#x2039;</button>
+        <button class="notes-toggle-btn" onclick="_notesToggleSidebar()" title="Collapse sidebar"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/></svg></button>
       </div>
     </div>
     <div class="notes-search-wrap">
@@ -5958,7 +5958,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <!-- Editor pane -->
   <div class="notes-editor-pane" id="notes-editor-pane">
     <div class="notes-editor-header">
-      <button class="notes-expand-btn" onclick="_notesToggleSidebar()" title="Show notes list">&#x203A;</button>
+      <button class="notes-expand-btn" onclick="_notesToggleSidebar()" title="Show notes list"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m14 9 3 3-3 3"/></svg></button>
       <input id="notes-title" type="text" placeholder="Note title…" class="notes-title-input" oninput="_notesTitleChange()" onblur="_notesSaveDebounce()">
       <div style="display:flex;gap:6px;align-items:center;">
         <span id="notes-save-status" style="font-size:0.72rem;color:var(--dim);"></span>
@@ -15064,22 +15064,30 @@ async function _notesSave() {
   if (!_notesActive || !_quill) return;
   const content = _quill.root.innerHTML === '<p><br></p>' ? '' : _quill.root.innerHTML;
   const pathKey = _notesActive.path.replace(/\.md$/, '');
-  await apiCall(API + '/api/notes/' + encodeURIComponent(pathKey), {
+  const statusEl = document.getElementById('notes-save-status');
+  const result = await apiCall(API + '/api/notes/' + encodeURIComponent(pathKey), {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ content })
   });
-  document.getElementById('notes-save-status').textContent = 'Saved';
-  setTimeout(() => { document.getElementById('notes-save-status').textContent = ''; }, 2000);
-  // Refresh list to update timestamps
-  const r = await fetch(API + '/api/notes');
-  if (!r.ok) return;
-  _notesAllNotes = await r.json();
-  // Re-apply current note's known title before re-rendering
-  if (_notesActive) {
-    const entry = _notesAllNotes.find(n => n.path === _notesActive.path);
-    if (entry && _notesActive.title) entry.name = _notesActive.title;
+  if (!result) {
+    statusEl.textContent = 'Queued';
+    setTimeout(() => { statusEl.textContent = ''; }, 2000);
+    return;
   }
-  _notesRenderList(_notesAllNotes);
+  statusEl.textContent = 'Saved';
+  setTimeout(() => { statusEl.textContent = ''; }, 2000);
+  // Refresh list to update timestamps
+  try {
+    const r = await fetch(API + '/api/notes');
+    if (!r.ok) return;
+    _notesAllNotes = await r.json();
+    // Re-apply current note's known title before re-rendering
+    if (_notesActive) {
+      const entry = _notesAllNotes.find(n => n.path === _notesActive.path);
+      if (entry && _notesActive.title) entry.name = _notesActive.title;
+    }
+    _notesRenderList(_notesAllNotes);
+  } catch(e) { /* offline, list stays as-is */ }
 }
 
 async function _notesDelete() {
