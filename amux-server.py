@@ -7018,7 +7018,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <div id="update-status" style="color:var(--dim);font-size:0.75rem;min-height:1.2em;"></div>
       <button id="pull-btn" class="btn" onclick="pullFromRemote(this)" style="margin-top:6px;font-size:0.72rem;padding:4px 12px;">&#x2B07; Pull from remote</button>
       <div id="pull-status" style="color:var(--dim);font-size:0.7rem;font-family:monospace;margin-top:4px;min-height:1.2em;white-space:pre-wrap;max-height:60px;overflow-y:auto;"></div>
-      <script>if(_cloudEmail){var _pb=document.getElementById('pull-btn');if(_pb)_pb.style.display='none';}</script>
+      <script>if(window._cloudEmail){var _pb=document.getElementById('pull-btn');if(_pb)_pb.style.display='none';}</script>
     </div>
     <div id="daily-stats" style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px;">
       <div style="color:var(--dim);font-size:0.75rem;text-align:center;">Loading token stats...</div>
@@ -16901,7 +16901,7 @@ class CCHandler(BaseHTTPRequestHandler):
                 except Exception: pass
             notes = []
             if CC_NOTES.exists():
-                for f in sorted(CC_NOTES.rglob("*.md"), key=lambda p: -p.stat().st_mtime):
+                for f in sorted((p for p in CC_NOTES.rglob("*.md") if ".trash" not in p.parts), key=lambda p: -p.stat().st_mtime):
                     rel = str(f.relative_to(CC_NOTES))
                     stat = f.stat()
                     try:
