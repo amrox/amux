@@ -4072,47 +4072,53 @@ RELEASE_NOTES_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0a0a0c">
 <title>amux — Release Notes</title>
 <meta name="description" content="amux release notes and changelog. Every commit, every feature, every fix.">
 <meta property="og:title" content="amux Release Notes">
 <meta property="og:description" content="Changelog for amux — the Claude session manager. Features, fixes, and everything in between.">
 <link rel="canonical" href="/release-notes">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;background:#0d1117;color:#e6edf3;min-height:100vh;line-height:1.5}
-a{color:#58a6ff;text-decoration:none}
-a:hover{text-decoration:underline}
-.rn-header{padding:40px 24px 32px;border-bottom:1px solid #21262d;max-width:860px;margin:0 auto}
+:root{--bg:#0a0a0c;--card:#111114;--border:#2a2a30;--text:#e8e8ec;--dim:#8888a0;--muted:#55556a;--green:#4ade80;--mono:'JetBrains Mono','SF Mono',Consolas,monospace}
+body{font-family:'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;line-height:1.5;-webkit-font-smoothing:antialiased}
+body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(255,255,255,0.008) 2px,rgba(255,255,255,0.008) 4px);pointer-events:none;z-index:9999}
+a{color:var(--green);text-decoration:none}
+a:hover{opacity:0.8}
+.rn-header{padding:40px 24px 32px;border-bottom:1px solid var(--border);max-width:860px;margin:0 auto}
 .rn-logo{display:flex;align-items:center;gap:10px;margin-bottom:24px}
-.rn-logo-mark{width:32px;height:32px;background:linear-gradient(135deg,#58a6ff,#a371f7);border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:0.9rem;color:#fff}
-.rn-logo-name{font-size:1.1rem;font-weight:700;color:#e6edf3}
-.rn-logo-sep{color:#484f58;margin:0 4px}
-.rn-logo-sub{font-size:1.1rem;color:#8b949e}
-h1.rn-title{font-size:2rem;font-weight:700;margin-bottom:8px}
-.rn-subtitle{color:#8b949e;font-size:1rem}
+.rn-logo-mark{width:32px;height:32px;background:var(--green);border-radius:6px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:0.9rem;color:var(--bg);font-family:var(--mono)}
+.rn-logo-name{font-size:1.1rem;font-weight:700;color:var(--green);font-family:var(--mono);letter-spacing:-0.03em}
+.rn-logo-sep{color:var(--muted);margin:0 4px;font-family:var(--mono)}
+.rn-logo-sub{font-size:1.1rem;color:var(--dim);font-family:var(--mono)}
+h1.rn-title{font-size:2rem;font-weight:700;margin-bottom:8px;font-family:var(--mono);letter-spacing:-0.04em}
+.rn-subtitle{color:var(--dim);font-size:1rem}
 .rn-content{max-width:860px;margin:0 auto;padding:0 24px 80px}
-.rn-entry{border-bottom:1px solid #21262d;padding:40px 0}
+.rn-entry{border-bottom:1px solid var(--border);padding:40px 0}
 .rn-entry:last-child{border-bottom:none}
 .rn-entry-meta{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px}
-.rn-date{font-size:0.8rem;color:#8b949e}
-.rn-badge{font-size:0.72rem;padding:2px 8px;border-radius:12px;font-weight:600;letter-spacing:0.02em}
-.rn-badge-feat{background:rgba(63,185,80,0.15);color:#3fb950;border:1px solid rgba(63,185,80,0.3)}
-.rn-badge-fix{background:rgba(248,129,62,0.15);color:#f8813e;border:1px solid rgba(248,129,62,0.3)}
-.rn-badge-chore{background:rgba(139,148,158,0.15);color:#8b949e;border:1px solid rgba(139,148,158,0.25)}
-.rn-tag{font-size:0.72rem;padding:2px 8px;border-radius:12px;background:rgba(88,166,255,0.1);color:#58a6ff;border:1px solid rgba(88,166,255,0.2)}
-.rn-commit{font-family:'SF Mono',Consolas,monospace;font-size:0.78rem;color:#8b949e;background:#161b22;border:1px solid #21262d;border-radius:6px;padding:2px 8px}
-.rn-commit:hover{color:#58a6ff;border-color:#58a6ff}
-.rn-entry-title{font-size:1.25rem;font-weight:600;margin-bottom:10px;color:#e6edf3}
-.rn-entry-desc{color:#8b949e;font-size:0.9rem;line-height:1.7;margin-bottom:20px;max-width:680px}
-.rn-video-wrap{border-radius:10px;overflow:hidden;background:#161b22;border:1px solid #21262d;margin-top:4px;aspect-ratio:16/9;max-width:680px;position:relative}
-.rn-video-wrap video{width:100%;height:100%;display:block;object-fit:contain;background:#0d1117}
-.rn-video-placeholder{width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#484f58;font-size:0.85rem;aspect-ratio:16/9;max-width:680px;background:#161b22;border:1px solid #21262d;border-radius:10px}
+.rn-date{font-size:0.8rem;color:var(--dim);font-family:var(--mono)}
+.rn-badge{font-size:0.72rem;padding:2px 8px;border-radius:12px;font-weight:600;letter-spacing:0.02em;font-family:var(--mono)}
+.rn-badge-feat{background:rgba(74,222,128,0.15);color:#4ade80;border:1px solid rgba(74,222,128,0.3)}
+.rn-badge-fix{background:rgba(251,191,36,0.12);color:#fbbf24;border:1px solid rgba(251,191,36,0.3)}
+.rn-badge-chore{background:rgba(136,136,160,0.15);color:var(--dim);border:1px solid rgba(136,136,160,0.25)}
+.rn-tag{font-size:0.72rem;padding:2px 8px;border-radius:12px;background:rgba(74,222,128,0.1);color:#4ade80;border:1px solid rgba(74,222,128,0.2);font-family:var(--mono)}
+.rn-commit{font-family:var(--mono);font-size:0.78rem;color:var(--dim);background:var(--card);border:1px solid var(--border);border-radius:6px;padding:2px 8px}
+.rn-commit:hover{color:var(--green);border-color:var(--green)}
+.rn-entry-title{font-size:1.25rem;font-weight:600;margin-bottom:10px;color:var(--text);font-family:var(--mono);letter-spacing:-0.02em}
+.rn-entry-desc{color:var(--dim);font-size:0.9rem;line-height:1.7;margin-bottom:20px;max-width:680px}
+.rn-video-wrap{border-radius:10px;overflow:hidden;background:var(--card);border:1px solid var(--border);margin-top:4px;aspect-ratio:16/9;max-width:680px;position:relative}
+.rn-video-wrap video{width:100%;height:100%;display:block;object-fit:contain;background:var(--bg)}
+.rn-video-placeholder{width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--muted);font-size:0.85rem;aspect-ratio:16/9;max-width:680px;background:var(--card);border:1px solid var(--border);border-radius:10px}
 .rn-video-placeholder svg{opacity:0.4}
 .rn-load-more{display:flex;justify-content:center;padding:32px 0}
-.rn-load-btn{background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:10px 24px;font-size:0.9rem;cursor:pointer;transition:background 0.15s}
-.rn-load-btn:hover{background:#30363d}
-.rn-spinner{display:flex;justify-content:center;padding:40px;color:#484f58;font-size:0.85rem}
-.rn-empty{text-align:center;padding:80px 24px;color:#484f58}
+.rn-load-btn{background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 24px;font-size:0.9rem;cursor:pointer;transition:border-color 0.15s;font-family:var(--mono)}
+.rn-load-btn:hover{border-color:var(--green);color:var(--green)}
+.rn-spinner{display:flex;justify-content:center;padding:40px;color:var(--muted);font-size:0.85rem}
+.rn-empty{text-align:center;padding:80px 24px;color:var(--muted)}
 .rn-sentinel{height:1px}
 @media(max-width:600px){
   .rn-header{padding:24px 16px 20px}
@@ -4242,12 +4248,21 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     --accent-dim: #22c55e; --accent-glow: rgba(74,222,128,0.15);
     --mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
   }
+  /* Green accent needs dark text for readability */
+  .btn.primary, .btn-create, .header-add-btn,
+  .notes-mode-tab.active, .report-period-tab.active,
+  .file-view-tab.active, .cal-view-tab.active,
+  .fe-tb-btn.active, .board-edit-actions .be-save,
+  .gp-chip.on, .peek-copy-btn:active,
+  .cal-cell.today .cal-cell-num { color: var(--bg) !important; }
+
   body.light {
     --bg: #ffffff; --card: #f6f8fa; --border: #d0d7de;
     --text: #1f2328; --dim: #656d76; --accent: #0969da;
     --green: #1a7f37; --red: #cf222e; --yellow: #9a6700;
-    --cyan: #0550ae;
+    --cyan: #0550ae; --bg2: #f6f8fa; --accent-glow: rgba(9,105,218,0.1);
   }
+  body.light .btn.primary, body.light .btn-create, body.light .header-add-btn { color: #fff !important; }
   body.light .board-sortable-ghost { background: rgba(9,105,218,0.08) !important; }
   body.light .log-line { filter: none; }
   /* ── Light mode contrast fixes ── */
@@ -4497,7 +4512,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   }
   .dot.running { background: var(--green); box-shadow: 0 0 6px var(--green); }
   .dot.stopped { background: var(--red); opacity: 0.5; }
-  .card-name { font-weight: 600; font-size: 1.05rem; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card-name { font-weight: 600; font-size: 1.05rem; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); letter-spacing: -0.02em; }
   .card-dir { color: var(--dim); font-size: 0.82rem; margin-top: 4px; margin-left: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 5px; }
   .card-dir-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .card-dir-edit { flex-shrink: 0; opacity: 0.3; transition: opacity 0.15s; cursor: pointer; font-size: 0.85rem; padding: 0 2px; border-radius: 3px; }
@@ -4553,15 +4568,15 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .chips::-webkit-scrollbar { display: none; }
   .chip {
     font-size: 0.78rem; padding: 6px 12px; border-radius: 16px;
-    background: rgba(88,166,255,0.12); color: var(--accent);
-    border: 1px solid rgba(88,166,255,0.25); cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
+    background: rgba(74,222,128,0.1); color: var(--accent);
+    border: 1px solid rgba(74,222,128,0.2); cursor: pointer;
+    -webkit-tap-highlight-color: transparent; font-family: var(--mono);
     min-height: 34px; display: flex; align-items: center;
     white-space: nowrap; flex-shrink: 0;
   }
-  .chip:active { background: rgba(88,166,255,0.25); }
-  .chip.danger { background: rgba(248,81,73,0.12); color: var(--red); border-color: rgba(248,81,73,0.25); }
-  .chip.danger:active { background: rgba(248,81,73,0.25); }
+  .chip:active { background: rgba(74,222,128,0.2); }
+  .chip.danger { background: rgba(248,113,113,0.1); color: var(--red); border-color: rgba(248,113,113,0.2); }
+  .chip.danger:active { background: rgba(248,113,113,0.2); }
   .send-row { display: flex; gap: 8px; min-width: 0; overflow: visible; position: relative; }
   .send-input {
     flex: 1; min-width: 0; font-size: 1rem; padding: 10px 14px; border-radius: 8px;
@@ -4570,7 +4585,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     resize: none; overflow-x: hidden; overflow-y: auto; line-height: 1.4;
     font-family: inherit; field-sizing: content; word-break: break-word;
   }
-  .send-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,0.12); }
+  .send-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
 
   /* Peek overlay */
   .overlay {
@@ -4914,15 +4929,17 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .header-row {
     display: flex; align-items: center; justify-content: space-between;
     position: sticky; top: 0; z-index: 40;
-    background: var(--bg); padding: 16px;
+    background: rgba(10,10,12,0.85); backdrop-filter: blur(20px);
+    padding: 16px; border-bottom: 1px solid var(--border);
     padding-top: max(16px, env(safe-area-inset-top));
     margin: -16px -16px 0 -16px;
   }
   .header-row h1 { margin-bottom: 0; }
   .btn-create {
     font-size: 0.85rem; padding: 8px 14px; border-radius: 8px;
-    border: 1px solid var(--accent); background: var(--accent); color: #fff;
+    border: 1px solid var(--accent); background: var(--accent); color: var(--bg);
     cursor: pointer; font-weight: 600; -webkit-tap-highlight-color: transparent;
+    font-family: var(--mono); letter-spacing: 0.01em;
   }
   .btn-create:active { opacity: 0.8; }
 
@@ -4963,7 +4980,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .active-dropdown-item .adi-info { flex: 1; min-width: 0; }
   .active-dropdown-item .adi-name { font-weight: 600; font-size: 0.88rem; }
   .active-dropdown-item .adi-dir { color: var(--dim); font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .active-dropdown-item .adi-preview { color: var(--dim); font-size: 0.7rem; font-family: "SF Mono", "Fira Code", monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+  .active-dropdown-item .adi-preview { color: var(--dim); font-size: 0.7rem; font-family: 'JetBrains Mono', "SF Mono", "Fira Code", monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
   .active-dropdown-empty { color: var(--dim); text-align: center; padding: 16px; font-size: 0.85rem; }
   .active-dropdown-item .adi-arrow { color: var(--dim); font-size: 0.8rem; flex-shrink: 0; }
 
@@ -4983,7 +5000,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .ac-item .ac-desc { font-family: -apple-system, sans-serif; color: var(--dim); font-size: 0.75rem; margin-left: 8px; }
   .ac-item {
     padding: 8px 12px; font-size: 0.88rem; cursor: pointer;
-    font-family: "SF Mono", "Fira Code", monospace; color: var(--text);
+    font-family: 'JetBrains Mono', "SF Mono", "Fira Code", monospace; color: var(--text);
     border-bottom: 1px solid var(--border);
   }
   .ac-item:last-child { border-bottom: none; }
@@ -5044,7 +5061,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .header-add-wrap { position: relative; }
   .header-add-btn {
     font-size: 1.1rem; width: 40px; height: 40px; border-radius: 8px;
-    border: 1px solid var(--accent); background: var(--accent); color: #fff;
+    border: 1px solid var(--accent); background: var(--accent); color: var(--bg);
     cursor: pointer; font-weight: 700; display: flex; align-items: center;
     justify-content: center; -webkit-tap-highlight-color: transparent;
   }
@@ -5552,11 +5569,12 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   }
   .tab-bar::-webkit-scrollbar { display: none; }
   .tab-bar button {
-    flex: none; padding: 10px 14px; font-size: 0.85rem; font-weight: 600;
+    flex: none; padding: 10px 14px; font-size: 0.82rem; font-weight: 600;
     background: none; border: none; border-bottom: 2px solid transparent;
     border-right: 1px solid var(--border);
     color: var(--dim); cursor: pointer; transition: color 0.15s, border-color 0.15s;
     -webkit-tap-highlight-color: transparent; white-space: nowrap;
+    font-family: var(--mono); letter-spacing: 0.02em;
   }
   .tab-bar button.active { color: var(--accent); border-bottom-color: var(--accent); }
   .tab-bar button:active { opacity: 0.7; }
@@ -6002,9 +6020,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   }
   .gp-title { font-size: 0.78rem; font-weight: 500; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
   .gp-dot { width: 7px; height: 7px; border-radius: 50%; background: #6e7681; flex-shrink: 0; transition: background 0.3s; }
-  .gp-dot.working { background: #3fb950; }
-  .gp-dot.waiting { background: #d29922; }
-  .gp-dot.idle { background: #58a6ff; }
+  .gp-dot.working { background: #4ade80; }
+  .gp-dot.waiting { background: #fbbf24; }
+  .gp-dot.idle { background: #8888a0; }
   .gp-close, .gp-peek-btn {
     background: none; border: none; color: var(--dim); cursor: pointer;
     font-size: 0.82rem; padding: 2px 5px; border-radius: 3px; line-height: 1;
@@ -6297,22 +6315,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             <input id="settings-device-name" type="text" autocomplete="off"
               onchange="saveDeviceName(this.value)">
           </div>
-        </div>
-        <div class="settings-sep"></div>
-        <div class="settings-section">
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <div class="settings-section-label" style="margin-bottom:0;">Servers</div>
-            <button class="btn" style="font-size:0.6rem;padding:1px 8px;" onclick="toggleSettingsAddServer()">+ Add</button>
-          </div>
-          <div id="settings-add-server" style="display:none;margin-top:8px;">
-            <input id="settings-new-server-name" class="search-input" type="text" placeholder="Label" style="width:100%;margin-bottom:4px;font-size:0.72rem;padding:5px 8px;box-sizing:border-box;">
-            <input id="settings-new-server-url" class="search-input" type="text" placeholder="https://host:8822" style="width:100%;margin-bottom:6px;font-size:0.72rem;padding:5px 8px;box-sizing:border-box;">
-            <div style="display:flex;gap:6px;justify-content:flex-end;">
-              <button class="btn" style="font-size:0.6rem;padding:1px 6px;" onclick="toggleSettingsAddServer()">Cancel</button>
-              <button class="btn" style="font-size:0.6rem;padding:1px 6px;background:var(--accent);color:#000;" onclick="saveSettingsNewServer()">Save</button>
-            </div>
-          </div>
-          <div id="settings-server-list" style="margin-top:6px;"></div>
         </div>
         <div class="settings-sep"></div>
         <div class="settings-section">
@@ -7574,13 +7576,16 @@ function _renderInstanceSwitcher() {
   if (menu) {
     menu.innerHTML = conns.map((c, i) => {
       const isCurr = c.url.replace(/\/$/, '') === origin.replace(/\/$/, '');
-      return `<div style="padding:8px 12px;border-radius:6px;cursor:pointer;font-size:0.8rem;${isCurr ? 'background:var(--accent10);font-weight:600;' : ''}display:flex;justify-content:space-between;align-items:center;"
-        onclick="${isCurr ? '' : `_switchInstance(${i})`}"
+      const allConns = [...conns, ...(conns.some(x => x.url.replace(/\/+$/,'')===location.origin) ? [] : [{name:location.host,url:location.origin}])];
+      const payload = btoa(JSON.stringify({servers:allConns,deviceName:localStorage.getItem('amux_device_name')||''}));
+      const syncUrl = isCurr ? '' : (c.url + '/?_sync=' + encodeURIComponent(payload));
+      return `<a href="${syncUrl}" style="display:block;padding:8px 12px;border-radius:6px;cursor:pointer;font-size:0.8rem;${isCurr ? 'background:var(--accent10);font-weight:600;' : ''}display:flex;justify-content:space-between;align-items:center;text-decoration:none;color:inherit;"
+        onclick="event.stopPropagation();${isCurr ? 'event.preventDefault();' : `closeSettings();_switchServerUrl(${i},event);`}"
         onmouseover="if(!${isCurr})this.style.background='var(--bg3)'"
         onmouseout="this.style.background='${isCurr ? 'var(--accent10)' : ''}'">
         <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(c.name)}</span>
         ${isCurr ? '<span style="color:var(--accent);font-size:0.65rem;">current</span>' : `<span style="color:var(--dim);font-size:0.7rem;">${esc(c.url.replace(/^https?:\/\//, ''))}</span>`}
-      </div>`;
+      </a>`;
     }).join('');
   }
 
@@ -7596,7 +7601,7 @@ function _renderInstanceSwitcher() {
             </div>
             ${isCurr
               ? '<span style="font-size:0.68rem;color:var(--accent);flex-shrink:0;">current</span>'
-              : `<button onclick="closeSettings();_switchInstance(${i})" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:2px 8px;font-size:0.72rem;cursor:pointer;flex-shrink:0;">Open</button>`}
+              : `<a href="${c.url+'/?_sync='+encodeURIComponent(btoa(JSON.stringify({servers:[...conns,...(conns.some(x=>x.url.replace(/\/+$/,'')===location.origin)?[]:[{name:location.host,url:location.origin}])],deviceName:localStorage.getItem('amux_device_name')||''})))}" onclick="event.stopPropagation();closeSettings();_switchServerUrl(${i},event);" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:2px 8px;font-size:0.72rem;cursor:pointer;flex-shrink:0;text-decoration:none;">Open</a>`}
             <button onclick="_removeConnection(${i})" style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:0.85rem;padding:0 2px;flex-shrink:0;" title="Remove">&#x2715;</button>
           </div>`;
         }).join('');
@@ -15314,22 +15319,37 @@ function _getSavedServers() {
 }
 function _saveServers(list) { localStorage.setItem('amux_servers', JSON.stringify(list)); }
 
-// Bootstrap: on page load, read ?_sync= param and merge server list + prefs into localStorage
+// Bootstrap: migrate amux_servers → amux_connections (one-time), then read ?_sync=
 (function _bootstrapFromUrl() {
+  // Migrate legacy amux_servers into amux_connections (dedupe by URL)
+  try {
+    const legacy = JSON.parse(localStorage.getItem('amux_servers') || '[]');
+    if (legacy.length) {
+      const conns = _loadConnections();
+      legacy.forEach(s => {
+        if (s && s.url && !conns.some(c => c.url.replace(/\/+$/, '') === s.url.replace(/\/+$/, ''))) {
+          conns.push(s);
+        }
+      });
+      _saveConnections(conns);
+      localStorage.removeItem('amux_servers');
+    }
+  } catch(e) {}
+
   const params = new URLSearchParams(location.search);
   const raw = params.get('_sync');
   if (!raw) return;
   try {
     const data = JSON.parse(atob(raw));
-    // Merge server list (dedupe by URL)
+    // Merge server list (dedupe by URL) into connections
     if (Array.isArray(data.servers)) {
-      const existing = _getSavedServers();
+      const conns = _loadConnections();
       data.servers.forEach(s => {
-        if (s && s.url && !existing.some(e => e.url.replace(/\/+$/, '') === s.url.replace(/\/+$/, ''))) {
-          existing.push(s);
+        if (s && s.url && !conns.some(c => c.url.replace(/\/+$/, '') === s.url.replace(/\/+$/, ''))) {
+          conns.push(s);
         }
       });
-      _saveServers(existing);
+      _saveConnections(conns);
     }
     // Restore device name only if not locally set
     if (data.deviceName && !localStorage.getItem('amux_device_name')) {
@@ -15343,39 +15363,30 @@ function _saveServers(list) { localStorage.setItem('amux_servers', JSON.stringif
 })();
 
 function renderServerList() {
+  // Delegate to connections-based renderer (servers and connections are now unified)
   const list = document.getElementById('server-list');
-  const servers = _getSavedServers();
+  if (!list) return;
+  const conns = _loadConnections();
   const current = location.origin;
-  const isPWA = navigator.standalone || window.matchMedia('(display-mode: standalone)').matches;
-  // Pre-compute sync payload for <a> tags
-  const allServers = [...servers];
-  if (!allServers.some(srv => srv.url.replace(/\/+$/, '') === current)) {
-    allServers.push({ name: location.host, url: current });
+  const allConns = [...conns];
+  if (!allConns.some(c => c.url.replace(/\/+$/, '') === current)) {
+    allConns.push({ name: location.host, url: current });
   }
-  const payload = btoa(JSON.stringify({
-    servers: allServers,
-    deviceName: localStorage.getItem('amux_device_name') || ''
-  }));
-  let html = '';
-  // Current server always shown first
-  html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px;border-radius:6px;background:rgba(88,166,255,0.08);margin-bottom:4px;">';
-  html += '<div style="min-width:0;flex:1;">';
-  html += '<div style="font-size:0.75rem;font-weight:600;color:var(--accent);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(location.host) + '</div>';
-  html += '<div style="font-size:0.65rem;color:var(--dim);">current</div>';
-  html += '</div></div>';
-  servers.forEach((s, i) => {
-    const isCurrent = s.url.replace(/\/+$/, '') === current;
-    if (isCurrent) return;  // skip — already shown above
-    const syncUrl = s.url + '/?_sync=' + encodeURIComponent(payload);
+  const payload = btoa(JSON.stringify({ servers: allConns, deviceName: localStorage.getItem('amux_device_name') || '' }));
+  let html = '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px;border-radius:6px;background:rgba(88,166,255,0.08);margin-bottom:4px;">';
+  html += '<div style="min-width:0;flex:1;"><div style="font-size:0.75rem;font-weight:600;color:var(--accent);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(location.host) + '</div>';
+  html += '<div style="font-size:0.65rem;color:var(--dim);">current</div></div></div>';
+  conns.forEach((c, i) => {
+    if (c.url.replace(/\/+$/, '') === current) return;
+    const syncUrl = c.url + '/?_sync=' + encodeURIComponent(payload);
     html += '<a style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px;border-radius:6px;margin-bottom:4px;cursor:pointer;transition:background 0.12s;text-decoration:none;color:inherit;" href="' + esc(syncUrl) + '" onclick="_switchServerUrl(' + i + ',event);">';
-    html += '<div style="min-width:0;flex:1;">';
-    html += '<div style="font-size:0.75rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(s.name || s.url) + '</div>';
-    if (s.name) html += '<div style="font-size:0.65rem;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(s.url.replace(/^https?:\/\//, '')) + '</div>';
+    html += '<div style="min-width:0;flex:1;"><div style="font-size:0.75rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(c.name || c.url) + '</div>';
+    if (c.name) html += '<div style="font-size:0.65rem;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(c.url.replace(/^https?:\/\//, '')) + '</div>';
     html += '</div>';
-    html += '<button class="btn" style="font-size:0.6rem;padding:1px 6px;flex-shrink:0;margin-left:8px;" onclick="event.preventDefault();event.stopPropagation();removeServer(' + i + ');renderServerList()">&#x2715;</button>';
+    html += '<button class="btn" style="font-size:0.6rem;padding:1px 6px;flex-shrink:0;margin-left:8px;" onclick="event.preventDefault();event.stopPropagation();_removeConnection(' + i + ');renderServerList()">&#x2715;</button>';
     html += '</a>';
   });
-  if (!servers.length || servers.every(s => s.url.replace(/\/+$/, '') === current)) {
+  if (!conns.length || conns.every(c => c.url.replace(/\/+$/, '') === current)) {
     html += '<div style="color:var(--dim);font-size:0.7rem;text-align:center;padding:4px 0;">No other servers saved</div>';
   }
   list.innerHTML = html;
@@ -15502,10 +15513,8 @@ function toggleSettings() {
       else if (/Linux/.test(ua)) auto = 'Linux';
       inp.placeholder = custom ? 'Override (' + auto + ')' : auto + ' (auto-detected)';
     }
-    // Render servers
-    renderSettingsServerList();
-    // Close add form
-    document.getElementById('settings-add-server').style.display = 'none';
+    // Render connections
+    _renderInstanceSwitcher();
   }
 }
 
