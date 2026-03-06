@@ -5945,10 +5945,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   }
   .notes-toggle-btn:hover { background: rgba(139,148,158,0.12); color: var(--text); }
   .notes-new-btn {
-    background: var(--accent); color: #fff; border: none; border-radius: 6px;
-    width: 24px; height: 24px; font-size: 1.1rem; cursor: pointer; line-height: 1;
-    display: flex; align-items: center; justify-content: center;
+    background: transparent; border: none; color: var(--dim); cursor: pointer;
+    padding: 4px; border-radius: 4px; display: flex; align-items: center; justify-content: center;
   }
+  .notes-new-btn:hover { background: rgba(139,148,158,0.12); color: var(--text); }
   /* Expand button shown in editor header when sidebar is collapsed */
   .notes-expand-btn {
     background: transparent; border: none; color: var(--dim); cursor: pointer;
@@ -5977,7 +5977,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .notes-list-item {
     padding: 8px 12px; cursor: pointer; border-bottom: 1px solid rgba(139,148,158,0.1);
     font-size: 0.82rem; color: var(--text); line-height: 1.3;
-    transition: background 0.1s;
+    transition: background 0.1s; touch-action: manipulation; user-select: none; -webkit-user-select: none;
   }
   .notes-list-item:hover { background: rgba(139,148,158,0.08); }
   .notes-list-item.active { background: rgba(88,166,255,0.12); color: var(--accent); }
@@ -5998,9 +5998,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   }
   .notes-delete-btn {
     background: transparent; border: none; color: var(--dim); cursor: pointer;
-    font-size: 0.9rem; padding: 2px 4px; opacity: 0.6;
+    padding: 4px; border-radius: 4px; display: flex; align-items: center; justify-content: center;
+    transition: background 0.12s, color 0.12s;
   }
-  .notes-delete-btn:hover { color: var(--red); opacity: 1; }
+  .notes-delete-btn:hover { background: rgba(248,81,73,0.12); color: var(--red,#f85149); }
+  .notes-delete-btn.confirming { background: var(--red,#f85149); color: #fff; border-radius: 4px; padding: 3px 8px; font-size: 0.75rem; font-weight: 600; }
   /* Quill editor fills pane */
   .notes-quill-wrap { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
   .notes-quill-wrap .ql-toolbar.ql-snow {
@@ -6025,11 +6027,12 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .notes-list-item.pinned { border-left: 2px solid var(--accent); }
   /* Pin button in editor header */
   .notes-pin-btn {
-    background: none; border: none; padding: 2px 4px; cursor: pointer;
-    font-size: 0.85rem; color: var(--dim); opacity: 0.5; transition: all 0.15s;
+    background: none; border: none; padding: 4px; border-radius: 4px; cursor: pointer;
+    color: var(--dim); display: flex; align-items: center; justify-content: center;
+    transition: background 0.12s, color 0.12s;
   }
-  .notes-pin-btn:hover { opacity: 1; color: var(--accent); }
-  .notes-pin-btn.pinned { opacity: 1; color: var(--accent); }
+  .notes-pin-btn:hover { background: rgba(139,148,158,0.12); color: var(--text); }
+  .notes-pin-btn.pinned { color: var(--accent); }
   .notes-empty-state {
     position: absolute; inset: 0; display: flex; flex-direction: column;
     align-items: center; justify-content: center;
@@ -6585,7 +6588,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="notes-sidebar-header">
       <span style="font-weight:600;font-size:0.85rem;">Notes</span>
       <div class="notes-sidebar-actions">
-        <button class="notes-new-btn" onclick="_notesNew()" title="New note">+</button>
+        <button class="notes-new-btn" onclick="_notesNew()" title="New note"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></button>
         <button class="notes-toggle-btn" onclick="_notesToggleSidebar()" title="Collapse sidebar"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/></svg></button>
       </div>
     </div>
@@ -6601,8 +6604,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <input id="notes-title" type="text" placeholder="Note title…" class="notes-title-input" oninput="_notesTitleChange()" onblur="_notesSaveDebounce()">
       <div style="display:flex;gap:6px;align-items:center;">
         <span id="notes-save-status" style="font-size:0.72rem;color:var(--dim);"></span>
-        <button id="notes-pin-btn" class="notes-pin-btn" onclick="_notesTogglePinActive()" title="Pin to top">&#x1F4CC;</button>
-        <button class="notes-delete-btn" onclick="_notesDelete()" title="Delete note">&#x1F5D1;</button>
+        <button id="notes-pin-btn" class="notes-pin-btn" onclick="_notesTogglePinActive()" title="Pin to top"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg></button>
+        <button class="notes-delete-btn" onclick="_notesDelete()" title="Delete note"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></button>
       </div>
     </div>
     <div class="notes-mode-tabs" id="notes-mode-tabs" style="display:none;">
@@ -12053,7 +12056,31 @@ function _pwaCb(e) {
   const k = e.key.toLowerCase();
   if (k !== 'a' && k !== 'c' && k !== 'x' && k !== 'v') return false;
   const ae = document.activeElement;
-  // Let contentEditable elements (e.g. Quill editor) handle clipboard natively
+  // Quill editor: handle clipboard via Quill API (Chrome PWA native paste unreliable on contenteditable)
+  if (ae && ae.isContentEditable && ae.closest('#notes-quill') && typeof _quill !== 'undefined' && _quill) {
+    if (k === 'v') {
+      e.preventDefault();
+      navigator.clipboard.readText().then(text => {
+        if (!text) return;
+        const range = _quill.getSelection(true);
+        if (range) { _quill.deleteText(range.index, range.length); _quill.insertText(range.index, text, 'user'); _quill.setSelection(range.index + text.length); }
+      }).catch(() => {});
+      return true;
+    }
+    if (k === 'a') { e.preventDefault(); _quill.setSelection(0, _quill.getLength()); return true; }
+    if (k === 'c' || k === 'x') {
+      const range = _quill.getSelection();
+      if (range && range.length > 0) {
+        const text = _quill.getText(range.index, range.length);
+        e.preventDefault();
+        navigator.clipboard.writeText(text).catch(() => {});
+        if (k === 'x') { _quill.deleteText(range.index, range.length, 'user'); }
+        return true;
+      }
+    }
+    return false;
+  }
+  // Other contentEditable elements: let browser handle natively
   if (ae && ae.isContentEditable) return false;
   const inp = (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) ? ae : null;
 
@@ -16015,10 +16042,12 @@ async function _notesOpen(path) {
   _notesOpenAbort = new AbortController();
   const signal = _notesOpenAbort.signal;
 
-  // Optimistic: highlight the clicked item immediately
+  // Optimistic: highlight the clicked item immediately and blank the editor
   document.querySelectorAll('#notes-list .notes-list-item').forEach(el => {
     el.classList.toggle('active', el.dataset.path === path);
   });
+  if (_quill) { _quill.setText(''); _quill.root.style.opacity = '0.3'; }
+  document.getElementById('notes-save-status').textContent = '';
 
   let r;
   try {
@@ -16168,26 +16197,25 @@ async function _notesSave() {
   }
 }
 
+const _TRASH_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>`;
 async function _notesDelete() {
   if (!_notesActive) return;
   const btn = document.querySelector('.notes-delete-btn');
-  if (btn && !btn.dataset.confirming) {
-    btn.dataset.confirming = '1';
+  if (btn && !btn.classList.contains('confirming')) {
+    btn.classList.add('confirming');
     btn.textContent = 'Delete?';
-    btn.style.cssText += ';background:var(--danger,#e53e3e);color:#fff;border-radius:4px;padding:2px 6px';
     const reset = () => {
-      if (!btn.dataset.confirming) return;
-      delete btn.dataset.confirming;
-      btn.innerHTML = '&#x1F5D1;';
-      btn.style.cssText = btn.style.cssText.replace(/;?background:[^;]+;color:[^;]+;border-radius:[^;]+;padding:[^;]+/g, '');
+      btn.classList.remove('confirming');
+      btn.innerHTML = _TRASH_SVG;
     };
-    setTimeout(reset, 3000);
+    const tid = setTimeout(reset, 3000);
+    btn._resetTimer = tid;
     return;
   }
   if (btn) {
-    delete btn.dataset.confirming;
-    btn.innerHTML = '&#x1F5D1;';
-    btn.style.cssText = btn.style.cssText.replace(/;?background:[^;]+;color:[^;]+;border-radius:[^;]+;padding:[^;]+/g, '');
+    clearTimeout(btn._resetTimer);
+    btn.classList.remove('confirming');
+    btn.innerHTML = _TRASH_SVG;
   }
   const pathKey = _notesActive.path.replace(/\.md$/, '');
   if (localStorage.getItem('amux_last_note') === _notesActive.path) localStorage.removeItem('amux_last_note');
