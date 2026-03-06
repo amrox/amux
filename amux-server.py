@@ -6091,6 +6091,22 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .notes-preview a { color: var(--accent); }
   .notes-preview ul, .notes-preview ol { padding-left: 22px; margin: 6px 0; }
   .notes-preview li { margin: 3px 0; }
+  /* Checklist items */
+  .notes-preview li[data-list="checked"],
+  .notes-preview li[data-list="unchecked"] { list-style: none; margin-left: -4px; padding-left: 4px; display: flex; align-items: baseline; gap: 8px; }
+  .notes-preview li[data-list="checked"]::before,
+  .notes-preview li[data-list="unchecked"]::before {
+    content: ''; display: inline-block; flex-shrink: 0;
+    width: 14px; height: 14px; border: 1.5px solid var(--dim);
+    border-radius: 3px; background: transparent; margin-top: 2px;
+    transition: background 0.1s, border-color 0.1s;
+  }
+  .notes-preview li[data-list="checked"]::before {
+    background: var(--accent); border-color: var(--accent);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 6l3 3 5-5' stroke='%23000' stroke-width='1.8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-size: 10px; background-repeat: no-repeat; background-position: center;
+  }
+  .notes-preview li[data-list="checked"] > *:last-child { text-decoration: line-through; color: var(--dim); }
   .notes-preview p { margin: 0 0 10px; }
   .notes-preview p:last-child { margin-bottom: 0; }
   /* Mobile notes improvements */
@@ -15950,6 +15966,36 @@ let _notesSidebarOpen = localStorage.getItem('amux_notes_sidebar') !== 'closed';
 let _notesOpenAbort = null; // AbortController for in-flight note fetches
 let _notesMode = 'preview'; // 'edit' | 'preview'
 
+function _notesPreviewBindCheckboxes(container) {
+  // Make data-list=check items interactive in preview — clicking toggles Quill delta
+  container.querySelectorAll('li[data-list="checked"], li[data-list="unchecked"]').forEach(li => {
+    li.style.cursor = 'pointer';
+    li.onclick = (e) => {
+      e.preventDefault();
+      if (!_quill) return;
+      const checked = li.dataset.list === 'checked';
+      li.dataset.list = checked ? 'unchecked' : 'checked';
+      // Find this item's index in the Quill delta and toggle it
+      const text = li.textContent;
+      let idx = 0;
+      _quill.getContents().ops.forEach(op => {
+        if (typeof op.insert === 'string') {
+          if (op.attributes?.list === 'checked' || op.attributes?.list === 'unchecked') {
+            const lineText = op.insert.replace(/\n$/, '');
+            if (lineText === text) {
+              _quill.formatLine(idx, 1, 'list', checked ? 'unchecked' : 'checked', 'api');
+            }
+          }
+          idx += op.insert.length;
+        } else {
+          idx += 1;
+        }
+      });
+      _notesSaveDebounce();
+    };
+  });
+}
+
 function _notesSwitchMode(mode) {
   _notesMode = mode;
   document.getElementById('notes-tab-edit').classList.toggle('active', mode === 'edit');
@@ -15961,6 +16007,7 @@ function _notesSwitchMode(mode) {
       const html = _quill.root.innerHTML;
       const isHtml = /<[a-z][\s\S]*>/i.test(html);
       preview.innerHTML = isHtml ? html : (typeof marked !== 'undefined' ? marked.parse(html) : html);
+      _notesPreviewBindCheckboxes(preview);
     }
     preview.classList.add('active');
     quillWrap.style.display = 'none';
@@ -15998,7 +16045,7 @@ function _notesInitQuill() {
         [{ header: [1, 2, 3, false] }],
         ['bold', 'italic', 'underline', 'strike'],
         ['blockquote', 'code-block'],
-        [{ list: 'ordered' }, { list: 'bullet' }],
+        [{ list: 'ordered' }, { list: 'bullet' }, { list: 'check' }],
         ['link'],
         ['clean']
       ]
@@ -16170,6 +16217,7 @@ async function _notesOpen(path) {
   document.getElementById('notes-quill-wrap').style.display = 'none';
   const previewEl = document.getElementById('notes-preview');
   previewEl.innerHTML = isHtml ? data.content : (typeof marked !== 'undefined' ? marked.parse(data.content || '') : data.content);
+  _notesPreviewBindCheckboxes(previewEl);
   previewEl.classList.add('active');
   quillRoot.style.opacity = '1';
   _notesSidebarUpdateActive(path);
