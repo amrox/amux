@@ -12018,19 +12018,21 @@ function _peekOpenLink(e) {
   const a = e.target.closest('a[href]');
   if (!a) return;
   const href = a.href;
-  if (href && /^https?:\/\//.test(href)) {
-    e.preventDefault();
-    e.stopPropagation();
-    // Use a synthetic <a> click — more reliable than window.open in desktop PWA
-    // standalone mode where window.open can be silently blocked by the popup blocker.
-    const tmp = document.createElement('a');
-    tmp.href = href;
-    tmp.target = '_blank';
-    tmp.rel = 'noopener noreferrer';
-    document.body.appendChild(tmp);
-    tmp.click();
-    document.body.removeChild(tmp);
-  }
+  if (!href || !/^https?:\/\//.test(href)) return;
+  // On desktop (click event), let the browser handle target=_blank naturally —
+  // calling preventDefault + synthetic click breaks desktop PWA where the
+  // synthetic click has no user gesture and is silently dropped.
+  if (e.type === 'click') return;
+  // On touch (touchend), use synthetic click to bypass iOS PWA popup blocker.
+  e.preventDefault();
+  e.stopPropagation();
+  const tmp = document.createElement('a');
+  tmp.href = href;
+  tmp.target = '_blank';
+  tmp.rel = 'noopener noreferrer';
+  document.body.appendChild(tmp);
+  tmp.click();
+  document.body.removeChild(tmp);
 }
 document.getElementById('peek-body').addEventListener('click', _peekOpenLink);
 document.getElementById('peek-body').addEventListener('touchend', _peekOpenLink, {passive: false});
