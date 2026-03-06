@@ -1739,7 +1739,7 @@ case "$cmd" in
       add)
         title="$*"
         curl -sk -X POST -H 'Content-Type: application/json' \
-          -d "{\"title\":\"$title\",\"status\":\"todo\"}" "$AMUX_URL/api/board" ;;
+          -d "{\"title\":\"$title\",\"status\":\"todo\",\"session\":\"${AMUX_SESSION:-}\"}" "$AMUX_URL/api/board" ;;
       list|ls|"")
         curl -sk "$AMUX_URL/api/board" | python3 -c "
 import json,sys
@@ -3036,7 +3036,7 @@ GLOBAL_MEMORY_DEFAULT = """\
 
 ## amux inter-session API
 
-You are session **$AMUX_SESSION** (env var). API base: **$AMUX_URL** (self-signed, use `curl -sk`).
+You are session **$AMUX_SESSION** (env var). API base: **$AMUX_URL** (use `curl -sk` for both TLS and plain HTTP).
 
 ### Discover sessions
 ```bash
@@ -3057,6 +3057,13 @@ curl -sk -X POST -H 'Content-Type: application/json' \\
 
 ### Task delegation via board (recommended for orchestration)
 ```bash
+# Create a board issue for yourself (always include your session name)
+amux board add "Task title"   # preferred — auto-associates with $AMUX_SESSION
+# Or via curl:
+curl -sk -X POST -H 'Content-Type: application/json' \\
+  -d "{\"title\":\"Task title\",\"session\":\"$AMUX_SESSION\"}" \\
+  $AMUX_URL/api/board
+
 # Post task for a specific session
 curl -sk -X POST -H 'Content-Type: application/json' \\
   -d '{"title":"Do X","session":"worker-1","owner_type":"agent","status":"todo"}' \\
