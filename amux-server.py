@@ -5467,7 +5467,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .peek-git-panel { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
   .peek-git-panel.active { display: flex; }
   .git-panel-header { display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap; }
-  .git-panel-body { display:flex;flex:1;min-height:0;overflow:hidden; }
+  .git-panel-body { display:flex;flex:1;min-height:0;overflow:hidden;position:relative; }
   .git-files-list { width:220px;flex-shrink:0;border-right:1px solid var(--border);overflow-y:auto;padding:6px 0; }
   .git-file-item { display:flex;align-items:center;gap:6px;padding:5px 10px;cursor:pointer;border-radius:4px;margin:0 4px;font-size:0.78rem;transition:background 0.1s; }
   .git-file-item:hover { background:var(--hover); }
@@ -5476,7 +5476,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .git-file-staged-dot { width:6px;height:6px;border-radius:50%;background:#818cf8;flex-shrink:0; }
   .git-stat-added { color:#4ade80;font-size:0.72rem;font-family:monospace;flex-shrink:0; }
   .git-stat-deleted { color:#f87171;font-size:0.72rem;font-family:monospace;flex-shrink:0; }
-  .git-diff-viewer { flex:1;overflow:auto;padding:0;font-family:monospace;font-size:0.78rem;line-height:1.55; }
+  .git-diff-viewer { flex:1;overflow:auto;padding:0;font-family:monospace;font-size:0.78rem;line-height:1.55;display:flex;flex-direction:column; }
   .git-diff-empty { display:flex;align-items:center;justify-content:center;flex:1;color:var(--dim);font-size:0.85rem; }
   .git-diff-hunk { display:block;color:#a78bfa;padding:2px 10px;background:rgba(139,92,246,0.07); }
   .git-diff-add { display:block;color:#4ade80;background:rgba(74,222,128,0.07);padding:0 10px; }
@@ -5485,6 +5485,20 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .git-diff-hdr { display:block;color:var(--dim);padding:2px 10px;font-weight:600;border-bottom:1px solid var(--border);background:var(--bg2); }
   .git-section-label { font-size:0.68rem;text-transform:uppercase;letter-spacing:0.07em;color:var(--dim);padding:8px 10px 3px;font-weight:600; }
   .git-no-changes { padding:20px 14px;color:var(--dim);font-size:0.82rem; }
+  .git-diff-back-btn { display:none;align-items:center;gap:6px;padding:7px 12px;border-bottom:1px solid var(--border);font-size:0.8rem;color:var(--dim);cursor:pointer;flex-shrink:0;background:var(--card);user-select:none; }
+  .git-diff-back-btn:hover { color:var(--text); }
+  @media (max-width: 600px) {
+    .git-files-list {
+      position: absolute; top: 0; left: 0; bottom: 0; z-index: 5;
+      width: 100% !important; border-right: none; background: var(--card);
+      transition: transform 0.2s ease, opacity 0.2s ease;
+    }
+    .git-files-list.diff-open {
+      transform: translateX(-110%); opacity: 0; pointer-events: none;
+    }
+    .git-diff-viewer { width: 100%; }
+    .git-diff-back-btn { display: flex !important; }
+  }
   .peek-memory-textarea { flex: 1; width: 100%; font-size: 0.88rem; line-height: 1.65;
     font-family: "SF Mono","Fira Code",monospace; background: var(--bg);
     border: 1px solid var(--border); border-radius: 8px; color: var(--text);
@@ -6491,6 +6505,12 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     flex: 1; display: flex; flex-direction: column; align-items: center;
     justify-content: center; color: var(--dim); gap: 10px;
   }
+  .crm-back-btn {
+    display: none; align-items: center; justify-content: center;
+    background: transparent; border: none; color: var(--dim); cursor: pointer;
+    padding: 4px 8px 4px 2px; border-radius: 4px; flex-shrink: 0; font-size: 1rem;
+  }
+  .crm-back-btn:hover { color: var(--text); }
   .crm-contact-hdr {
     padding: 14px 20px 10px; border-bottom: 1px solid var(--border); flex-shrink: 0;
   }
@@ -6591,8 +6611,18 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .crm-log-field textarea { resize: vertical; min-height: 70px; }
   .crm-log-actions { display: flex; gap: 8px; justify-content: flex-end; }
   @media (max-width: 600px) {
-    #crm-view { height: calc(100dvh - 122px); }
-    .crm-sidebar { width: 180px; min-width: 140px; }
+    #crm-view { height: calc(100dvh - 122px); position: relative; }
+    .crm-sidebar {
+      position: absolute; top: 0; left: 0; bottom: 0; z-index: 10;
+      width: 100% !important; min-width: 0 !important; border-right: none;
+      transition: transform 0.2s ease, opacity 0.2s ease;
+    }
+    .crm-sidebar.collapsed {
+      width: 100% !important; transform: translateX(-110%); opacity: 0; pointer-events: none;
+    }
+    .crm-detail { width: 100%; }
+    .crm-back-btn { display: flex !important; }
+    .crm-contact-hdr { padding: 10px 14px 8px; }
   }
 </style>
 </head>
@@ -7165,6 +7195,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div id="crm-contact-form" style="display:none;flex-direction:column;overflow:hidden;flex:1;">
       <div class="crm-contact-hdr">
         <div style="display:flex;align-items:center;gap:8px;">
+          <button class="crm-back-btn" onclick="_crmBack()" title="Back to contacts">&#8592;</button>
           <input id="crm-name" class="crm-name-input" placeholder="Name" oninput="_crmDirtied()" onblur="_crmAutoSave()">
           <button id="crm-delete-btn" class="notes-delete-btn" onclick="_crmDeleteContact()" title="Delete contact"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></button>
         </div>
@@ -7581,8 +7612,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         </div>
         <!-- Right: diff viewer -->
         <div id="peek-git-diff-viewer" class="git-diff-viewer">
+          <div class="git-diff-back-btn" onclick="_gitDiffBack()">&#8592; Files</div>
           <div class="git-diff-empty" id="peek-git-diff-empty">Select a file to view diff</div>
-          <pre id="peek-git-diff-pre" style="display:none;margin:0;white-space:pre;"></pre>
+          <pre id="peek-git-diff-pre" style="display:none;margin:0;white-space:pre;flex:1;overflow:auto;"></pre>
         </div>
       </div>
       <div id="peek-git-empty" style="display:none;color:var(--dim);font-size:0.85rem;padding:20px 16px;">No git repository found for this session.</div>
@@ -9887,9 +9919,17 @@ function _renderPeekGit(d) {
   document.getElementById('peek-git-diff-empty').textContent = files.length ? 'Select a file to view diff' : 'No changes';
 }
 
+function _gitDiffBack() {
+  const filesList = document.getElementById('peek-git-files-list');
+  if (filesList) filesList.classList.remove('diff-open');
+}
+
 async function peekGitSelectFile(el, file, staged) {
   document.querySelectorAll('#peek-git-files-list .git-file-item').forEach(e => e.classList.remove('active'));
   el.classList.add('active');
+  // Mobile: slide file list off to show diff
+  const filesList = document.getElementById('peek-git-files-list');
+  if (filesList && window.innerWidth <= 600) filesList.classList.add('diff-open');
   const diffPre = document.getElementById('peek-git-diff-pre');
   const diffEmpty = document.getElementById('peek-git-diff-empty');
   diffPre.style.display = 'none';
@@ -9903,8 +9943,10 @@ async function peekGitSelectFile(el, file, staged) {
     if (!d.diff) { diffEmpty.textContent = 'No diff available.'; return; }
     diffPre.innerHTML = _renderDiff(d.diff);
     diffPre.style.display = 'block';
+    diffPre.style.overflow = 'auto';
+    diffPre.style.flex = '1';
     diffEmpty.style.display = 'none';
-    diffPre.parentElement.scrollTop = 0;
+    diffPre.scrollTop = 0;
   } catch(e) {
     diffEmpty.textContent = 'Failed to load diff.';
   }
@@ -10099,6 +10141,8 @@ function openPeek(name, opts) {
   peekSessionDir = (sessions.find(s => s.name === name) || {}).dir || '';
   // Reset to terminal tab
   _peekGitData = null;
+  const _gfl = document.getElementById('peek-git-files-list');
+  if (_gfl) _gfl.classList.remove('diff-open');
   if (_peekTab !== 'terminal') setPeekTab('terminal');
   document.getElementById('peek-terminal-panel').style.display = '';
   document.getElementById('peek-memory-panel').classList.remove('active');
@@ -17380,6 +17424,12 @@ function _crmRenderQueue(contacts) {
 }
 function _crmToggleQueue() { _crmQueueOpen = !_crmQueueOpen; _crmRenderQueue(_crmContacts); }
 
+function _crmBack() {
+  // Mobile: show sidebar, hide detail
+  const sidebar = document.querySelector('.crm-sidebar');
+  if (sidebar) sidebar.classList.remove('collapsed');
+}
+
 async function _crmOpenContact(id) {
   if (id === _crmActiveId) return;
   if (_crmDirty) await _crmFlushSave();
@@ -17391,6 +17441,9 @@ async function _crmOpenContact(id) {
   document.querySelectorAll('.crm-contact-item').forEach(el => el.classList.toggle('active', el.dataset.id === id));
   const form = document.getElementById('crm-contact-form');
   if (form.style.display !== 'none') form.style.opacity = '0.4';
+  // Mobile: collapse sidebar to show detail pane
+  const sidebar = document.querySelector('.crm-sidebar');
+  if (sidebar && window.innerWidth <= 600) sidebar.classList.add('collapsed');
   // Cancel any in-flight fetch
   if (_crmOpenAbort) _crmOpenAbort.abort();
   _crmOpenAbort = new AbortController();
@@ -17558,6 +17611,8 @@ async function _crmDeleteContact() {
   _crmRenderQueue(_crmContacts);
   document.getElementById('crm-contact-form').style.display = 'none';
   document.getElementById('crm-detail-empty').style.display = '';
+  // Mobile: show sidebar after delete
+  if (window.innerWidth <= 600) { const sb = document.querySelector('.crm-sidebar'); if (sb) sb.classList.remove('collapsed'); }
   // Auto-open next contact if any
   if (_crmContacts.length > 0) await _crmOpenContact(_crmContacts[0].id);
   apiCall(API + '/api/crm/contacts/' + id, { method: 'DELETE' }); // fire-and-forget
