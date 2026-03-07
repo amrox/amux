@@ -6242,6 +6242,23 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <div id="no-apikey-banner" style="display:none;background:#7c2d12;color:#fed7aa;padding:8px 16px;text-align:center;font-size:0.82rem;z-index:200;position:relative;">
   No Anthropic API key set — Claude sessions won't work. <a href="#" onclick="event.preventDefault();document.getElementById('no-apikey-banner').style.display='none';toggleSettings()" style="color:#fde68a;font-weight:600;text-decoration:underline;">Add key in Settings</a>
 </div>
+<!-- Blocking API key setup modal — shown on cloud when no user key is configured -->
+<div id="apikey-setup-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9999;display:none;align-items:center;justify-content:center;">
+  <div style="background:var(--surface,#1a1a2e);border:1px solid var(--border,#333);border-radius:12px;padding:32px;max-width:440px;width:90%;box-shadow:0 24px 64px rgba(0,0,0,0.6);">
+    <div style="font-size:1.4rem;font-weight:700;margin-bottom:8px;color:var(--text,#e8e8e8);">Set your API key</div>
+    <div style="font-size:0.85rem;color:var(--dim,#888);margin-bottom:24px;line-height:1.5;">
+      Enter your Anthropic API key to start using Claude sessions. Your key is stored privately in your container — amux never has access to it.<br><br>
+      <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:var(--accent,#7c6fcd);">Get a key at console.anthropic.com →</a>
+    </div>
+    <input id="apikey-setup-input" type="password" placeholder="sk-ant-api03-..." autocomplete="off" spellcheck="false"
+      style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:7px;border:1px solid var(--border,#333);background:var(--bg,#111);color:var(--text,#e8e8e8);font-size:0.92rem;font-family:monospace;margin-bottom:8px;">
+    <div id="apikey-setup-err" style="color:#f87171;font-size:0.8rem;min-height:18px;margin-bottom:12px;"></div>
+    <button id="apikey-setup-btn" onclick="apikeySetupSave()"
+      style="width:100%;padding:11px;border-radius:7px;border:none;background:var(--accent,#7c6fcd);color:#fff;font-size:0.95rem;font-weight:600;cursor:pointer;">
+      Save &amp; continue
+    </button>
+  </div>
+</div>
 <div id="org-banner" style="display:none;background:#1e1b4b;border-bottom:1px solid #4338ca;color:#c7d2fe;padding:7px 16px;text-align:center;font-size:0.82rem;z-index:200;position:relative;display:none;">
   <span id="org-banner-text"></span>
   <button onclick="_switchOrg('')" style="margin-left:12px;background:#4338ca;color:#e0e7ff;border:none;border-radius:4px;padding:2px 10px;font-size:0.78rem;cursor:pointer;">← My workspace</button>
@@ -7396,8 +7413,15 @@ async function _initIdentity() {
     const d = await r.json();
     _cloudEmail = d.email || '';
     if (!d.has_api_key) {
-      const banner = document.getElementById('no-apikey-banner');
-      if (banner) banner.style.display = '';
+      if (d.is_cloud) {
+        // Blocking modal for cloud users — must set key before using the app
+        const m = document.getElementById('apikey-setup-modal');
+        if (m) { m.style.display = 'flex'; m.style.removeProperty('display'); m.style.display = 'flex'; }
+        setTimeout(() => document.getElementById('apikey-setup-input')?.focus(), 100);
+      } else {
+        const banner = document.getElementById('no-apikey-banner');
+        if (banner) banner.style.display = '';
+      }
     }
     _applyIdentityToSettings();
     if (_cloudEmail) {
@@ -7406,6 +7430,28 @@ async function _initIdentity() {
       _loadGatewayOrgs();
     }
   } catch(e) {}
+}
+
+async function apikeySetupSave() {
+  const inp = document.getElementById('apikey-setup-input');
+  const err = document.getElementById('apikey-setup-err');
+  const btn = document.getElementById('apikey-setup-btn');
+  const key = (inp?.value || '').trim();
+  if (!key.startsWith('sk-ant-')) { if (err) err.textContent = 'Key must start with sk-ant-'; return; }
+  if (err) err.textContent = '';
+  if (btn) btn.textContent = 'Saving…';
+  try {
+    const r = await fetch('/api/settings/env', {
+      method: 'PATCH', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ANTHROPIC_API_KEY: key})
+    });
+    if (!r.ok) throw new Error('save failed');
+    const m = document.getElementById('apikey-setup-modal');
+    if (m) m.style.display = 'none';
+  } catch(e) {
+    if (err) err.textContent = 'Failed to save — try again';
+    if (btn) btn.textContent = 'Save & continue';
+  }
 }
 
 async function _loadGatewayOrgs() {
@@ -18893,7 +18939,14 @@ class CCHandler(BaseHTTPRequestHandler):
         # ── Identity (cloud user info forwarded by gateway) ──────────────────
         if path == "/api/identity" and method == "GET":
             email = self.headers.get("X-Amux-User-Email", "")
-            has_key = bool(os.environ.get("ANTHROPIC_API_KEY", ""))
+            # has_api_key is only True when the user explicitly saved their own key
+            # via settings (written to server.env). Platform-injected env vars don't count.
+            has_key = False
+            if _server_env_file.exists():
+                for _line in _server_env_file.read_text().splitlines():
+                    if _line.startswith("ANTHROPIC_API_KEY=") and _line.split("=", 1)[1].strip():
+                        has_key = True
+                        break
             return self._json({"email": email, "is_cloud": bool(email), "has_api_key": has_key})
 
         # ── Settings env (ANTHROPIC_API_KEY etc.) ─────────────────────────────
