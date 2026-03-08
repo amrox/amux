@@ -17033,20 +17033,20 @@ function saveNewServer() {
   const name = document.getElementById('add-server-name').value.trim();
   let url = _normalizeServerUrl(document.getElementById('add-server-url').value.trim());
   if (!url) { showToast('URL is required'); return; }
-  const servers = _getSavedServers();
+  const servers = _loadConnections();
   if (servers.some(s => s.url.replace(/\/+$/, '') === url)) { showToast('Server already saved'); return; }
   _ensureCurrentServerSaved(servers);
   servers.push({ name: name || '', url });
-  _saveServers(servers);
+  _saveConnections(servers);
   document.getElementById('add-server-form').style.display = 'none';
   renderServerList();
   showToast('Server saved');
 }
 
 function removeServer(idx) {
-  const servers = _getSavedServers();
+  const servers = _loadConnections();
   servers.splice(idx, 1);
-  _saveServers(servers);
+  _saveConnections(servers);
   renderServerList();
   if (typeof renderSettingsServerList === 'function') renderSettingsServerList();
 }
@@ -17054,7 +17054,7 @@ function removeServer(idx) {
 // Called from server list <a> onclick — handles PWA cross-origin navigation
 function _switchServerUrl(idx, evt) {
   evt && evt.preventDefault();
-  const servers = _getSavedServers();
+  const servers = _loadConnections();
   const s = servers[idx];
   if (!s) return;
   const currentOrigin = location.origin;
@@ -17076,7 +17076,7 @@ function _switchServerUrl(idx, evt) {
 }
 
 function switchServer(idx) {
-  const servers = _getSavedServers();
+  const servers = _loadConnections();
   const s = servers[idx];
   if (!s) return;
   // Ensure current server is in the list we pass so the destination can switch back
@@ -17151,7 +17151,7 @@ function saveDeviceName(val) {
 
 function renderSettingsServerList() {
   const el = document.getElementById('settings-server-list');
-  const servers = _getSavedServers();
+  const servers = _loadConnections();
   const current = location.origin;
   const isPWA = navigator.standalone || window.matchMedia('(display-mode: standalone)').matches;
   // Pre-compute sync payload so server items can be real <a> tags (user gesture = direct tap)
@@ -17206,14 +17206,14 @@ function saveSettingsNewServer() {
   const name = document.getElementById('settings-new-server-name').value.trim();
   let url = _normalizeServerUrl(document.getElementById('settings-new-server-url').value.trim());
   if (!url) { showToast('URL is required'); return; }
-  const servers = _getSavedServers();
+  const servers = _loadConnections();
   if (servers.some(s => s.url.replace(/\/+$/, '') === url)) {
     showToast('Server already saved');
     return;
   }
   _ensureCurrentServerSaved(servers);
   servers.push({ name: name || '', url });
-  _saveServers(servers);
+  _saveConnections(servers);
   document.getElementById('settings-add-server').style.display = 'none';
   renderSettingsServerList();
   showToast('Server saved');
