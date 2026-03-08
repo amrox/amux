@@ -143,7 +143,7 @@ async function runDesktop(browser) {
   log('Sessions tab exists', !!sessionsTab);
   const boardTab = await page.$('#tab-board');
   log('Board tab exists', !!boardTab);
-  const calTab = await page.$('#tab-calendar');
+  const calTab = await page.$('#tab-scheduler');
   log('Calendar tab exists', !!calTab);
 
   // ── Sessions view ──────────────────────────────────────────────────────────

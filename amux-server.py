@@ -4441,6 +4441,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@7/dist/gridstack.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.snow.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/quilljs-markdown@latest/dist/quilljs-markdown-common-style.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
@@ -4713,8 +4714,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .branch-badge.conflict { color: var(--red) !important; }
   .branch-popover {
     position: fixed; z-index: 9999; width: 240px;
-    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-    padding: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    background: var(--bg, #0d1117); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.7);
   }
   .branch-popover input { width: 100%; box-sizing: border-box; margin-bottom: 8px; }
   .branch-popover-actions { display: flex; gap: 6px; }
@@ -6671,6 +6672,70 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     .crm-back-btn { display: flex !important; }
     .crm-contact-hdr { padding: 10px 14px 8px; }
   }
+
+  /* ── Map view ─────────────────────────────────────────────────────────────── */
+  #map-view { height: calc(100vh - 110px); display: flex; flex-direction: row; overflow: hidden; position: relative; }
+  .map-sidebar { width: 260px; min-width: 220px; border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; background: var(--card); transition: transform 0.25s ease; }
+  .map-sidebar-hdr { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px 8px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .map-sidebar-hdr-title { font-weight: 600; font-size: 0.85rem; }
+  .map-sidebar-hdr-btns { display: flex; gap: 4px; align-items: center; }
+  .map-sidebar-section { border-bottom: 1px solid var(--border); padding: 8px 10px; flex-shrink: 0; }
+  .map-section-hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; font-size: 0.72rem; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: 0.03em; }
+  .map-tag-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .map-tag-chip { padding: 2px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 500; cursor: pointer; border: 1px solid var(--border); background: transparent; color: var(--dim); transition: all 0.15s; white-space: nowrap; }
+  .map-tag-chip:hover { color: var(--text); border-color: var(--dim); }
+  .map-tag-chip.all-active { background: var(--accent); color: #fff; border-color: transparent; }
+  .map-tag-chip.tag-active { color: #fff; border-color: transparent; }
+  .map-search-section { padding: 8px 10px; flex-shrink: 0; border-bottom: 1px solid var(--border); }
+  .map-search-section input { width: 100%; box-sizing: border-box; padding: 5px 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.8rem; outline: none; }
+  .map-search-section input:focus { border-color: var(--accent); }
+  .map-pin-list { flex: 1; overflow-y: auto; padding: 4px 0; }
+  .map-pin-item { display: flex; align-items: flex-start; gap: 8px; padding: 7px 10px; cursor: pointer; transition: background 0.1s; }
+  .map-pin-item:hover { background: rgba(255,255,255,0.04); }
+  .map-pin-item.active { background: rgba(88,166,255,0.1); }
+  .map-pin-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; margin-top: 4px; border: 1.5px solid rgba(255,255,255,0.25); }
+  .map-pin-info { flex: 1; min-width: 0; }
+  .map-pin-name { font-size: 0.82rem; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .map-pin-tagrow { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 2px; }
+  .map-pin-tag { font-size: 0.68rem; padding: 1px 5px; border-radius: 8px; border: 1px solid; font-weight: 500; }
+  .map-pin-desc { font-size: 0.73rem; color: var(--dim); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .map-pin-edit-btn { opacity: 0; background: none; border: none; cursor: pointer; font-size: 0.75rem; padding: 2px 4px; flex-shrink: 0; color: var(--dim); transition: opacity 0.1s; line-height: 1; }
+  .map-pin-item:hover .map-pin-edit-btn { opacity: 1; }
+  .map-empty { padding: 20px 12px; text-align: center; font-size: 0.8rem; color: var(--dim); line-height: 1.5; }
+  .map-open-btn { position: absolute; left: 0; top: 50%; transform: translateY(-50%); z-index: 1001; background: var(--card); border: 1px solid var(--border); border-left: none; color: var(--text); cursor: pointer; padding: 10px 6px; font-size: 0.85rem; border-radius: 0 6px 6px 0; display: none; box-shadow: 2px 0 8px rgba(0,0,0,0.3); }
+  .map-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; min-width: 0; }
+  #map-container { flex: 1; z-index: 1; background: var(--bg); }
+  .map-drop-hint { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.85); color: #fff; padding: 7px 18px; border-radius: 20px; font-size: 0.8rem; z-index: 1002; pointer-events: none; display: none; white-space: nowrap; box-shadow: 0 2px 10px rgba(0,0,0,0.5); }
+  .map-toolbar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; background: var(--card); border-top: 1px solid var(--border); flex-shrink: 0; flex-wrap: wrap; }
+  .map-coords { font-size: 0.71rem; color: var(--dim); font-family: monospace; margin-left: auto; }
+  .map-drop-btn.dropping { background: var(--accent) !important; color: #fff !important; border-color: transparent !important; }
+  .map-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 9100; align-items: center; justify-content: center; padding: 16px; box-sizing: border-box; }
+  .map-modal-box { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; width: 360px; max-width: 100%; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); max-height: 90vh; overflow-y: auto; }
+  .map-modal-title { font-weight: 600; font-size: 0.95rem; margin-bottom: 2px; }
+  .map-modal-input { width: 100%; padding: 7px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.85rem; outline: none; font-family: inherit; box-sizing: border-box; }
+  .map-modal-input:focus { border-color: var(--accent); }
+  .map-modal-textarea { width: 100%; padding: 7px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.85rem; outline: none; font-family: inherit; box-sizing: border-box; resize: vertical; min-height: 60px; }
+  .map-modal-textarea:focus { border-color: var(--accent); }
+  .map-modal-hint { font-size: 0.75rem; color: var(--accent); min-height: 1em; }
+  .map-modal-row { display: flex; gap: 8px; }
+  .map-modal-row .map-modal-input { flex: 1; min-width: 0; }
+  .map-modal-label { font-size: 0.75rem; color: var(--dim); margin-bottom: -4px; }
+  .map-modal-tags-row { display: flex; flex-wrap: wrap; gap: 6px; min-height: 24px; }
+  .map-tag-check { display: flex; align-items: center; gap: 5px; font-size: 0.78rem; cursor: pointer; padding: 3px 9px; border-radius: 10px; border: 1px solid var(--border); transition: all 0.12s; user-select: none; }
+  .map-tag-check input { display: none; }
+  .map-tag-color-row { display: flex; align-items: center; gap: 10px; font-size: 0.82rem; color: var(--text); }
+  .map-tag-color-row input[type=color] { width: 36px; height: 28px; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; background: none; padding: 2px; }
+  .map-modal-actions { display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; align-items: center; }
+  .map-btn-danger { background: var(--red) !important; color: #fff !important; border-color: transparent !important; }
+  .map-btn-danger:hover { opacity: 0.85; }
+  @media (max-width: 600px) {
+    #map-view { height: calc(100dvh - 122px); }
+    .map-sidebar { position: absolute; top: 0; left: 0; bottom: 0; z-index: 1000; width: 82vw !important; min-width: 0 !important; box-shadow: 4px 0 24px rgba(0,0,0,0.6); }
+    .map-sidebar.hidden { transform: translateX(-105%); }
+    .map-open-btn { display: block; }
+    .map-toolbar { gap: 4px; padding: 5px 8px; }
+  }
+
 </style>
 </head>
 <body>
@@ -6829,10 +6894,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <div class="tab-bar">
   <button id="tab-sessions" class="active" onclick="switchView('sessions')">Sessions</button>
   <button id="tab-board" onclick="switchView('board')">Board</button>
-  <button id="tab-calendar" onclick="switchView('calendar')">Calendar</button>
   <button id="tab-scheduler" onclick="switchView('scheduler')">Scheduler</button>
-  <button id="tab-reports" onclick="switchView('reports')">Reports</button>
-  <button id="tab-notifications" onclick="switchView('notifications')">Notifications</button>
   <button id="tab-files" onclick="switchView('files')">Files</button>
   <button id="tab-logs" onclick="switchView('logs')">Logs</button>
   <button id="tab-browser" onclick="switchView('browser')">Browser</button>
@@ -6840,6 +6902,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <button id="tab-email" onclick="switchView('email')">Email</button>
   <button id="tab-notes" onclick="switchView('notes')">Notes</button>
   <button id="tab-crm" onclick="switchView('crm')">People</button>
+  <button id="tab-map" onclick="switchView('map')">Map</button>
 </div>
 <div class="tab-customize-wrap">
   <button class="tab-customize-btn" onclick="event.stopPropagation();toggleTabCustomizer()" title="Show/hide tabs">&#x229E;</button>
@@ -6891,28 +6954,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <div class="board-filters" id="board-filters"></div>
   <div class="board-columns" id="board-columns"></div>
 </div>
-<!-- Calendar view -->
-<div id="calendar-view" style="display:none;">
-  <div class="cal-toolbar">
-    <div class="cal-nav-row">
-      <button class="btn" onclick="calPrev()">&#x2039;</button>
-      <span id="cal-title" class="cal-title"></span>
-      <button class="btn" onclick="calNext()">&#x203A;</button>
-    </div>
-    <div class="cal-controls-row">
-      <button id="cal-today-btn" class="btn" onclick="calToday()">Today</button>
-      <div class="cal-view-tabs">
-        <button class="cal-view-tab" id="cal-tab-month" onclick="calSetView('month')">Month</button>
-        <button class="cal-view-tab" id="cal-tab-week" onclick="calSetView('week')">Week</button>
-        <button class="cal-view-tab" id="cal-tab-day" onclick="calSetView('day')">Day</button>
-      </div>
-      <button class="btn" onclick="showIcalInfo()" title="Subscribe in Google / Apple Calendar" style="font-size:0.8rem;">&#x1F4C5;</button>
-      <button class="btn" onclick="openSchedModal()" title="New scheduled task" style="font-size:0.8rem;">&#x23F0; Schedule</button>
-    </div>
-  </div>
-  <div id="cal-body"></div>
-</div>
-
 <!-- Scheduler view -->
 <div id="scheduler-view" style="display:none;">
   <div style="padding:10px 12px 6px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);">
@@ -6951,49 +6992,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   </div>
   <div id="email-events-list" style="padding:0 12px 60px;display:flex;flex-direction:column;gap:8px;"></div>
 </div>
-<!-- Reports view -->
-<div id="reports-view" style="display:none;">
-  <div style="padding:10px 12px 6px;display:flex;align-items:center;gap:8px;">
-    <span style="font-weight:600;font-size:0.85rem;color:var(--text);">Reports</span>
-    <div style="flex:1;"></div>
-    <button class="btn" onclick="openAddReport()" style="font-size:0.78rem;padding:4px 10px;">+ Add Report</button>
-  </div>
-  <div id="reports-list" style="padding:0 12px 12px;display:flex;flex-direction:column;gap:12px;"></div>
-  <!-- Add report modal -->
-  <div id="add-report-overlay" class="board-edit-overlay" onclick="if(event.target===this)closeAddReport()" style="display:none;">
-    <div class="board-edit-box" style="max-width:400px;">
-      <div style="font-weight:600;font-size:0.9rem;margin-bottom:12px;">Add Report</div>
-      <div class="field-group">
-        <label class="field-label">Report Name</label>
-        <input id="add-report-name" type="text" placeholder="Ops Spend" autocomplete="off" style="width:100%;box-sizing:border-box;">
-      </div>
-      <div class="field-group">
-        <label class="field-label">Type</label>
-        <select id="add-report-type" onchange="_updateAddReportVendors()" style="width:100%;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.85rem;">
-          <option value="infra-spend">Infrastructure Spend</option>
-        </select>
-      </div>
-      <div class="field-group" id="add-report-vendors-group">
-        <label class="field-label">Vendors</label>
-        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:4px;"></div>
-      </div>
-      <div style="display:flex;gap:8px;margin-top:14px;">
-        <button class="btn" onclick="closeAddReport()" style="flex:1;">Cancel</button>
-        <button class="btn primary" onclick="submitAddReport()" style="flex:1;">Add</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- Notifications view -->
-<div id="notifications-view" style="display:none;">
-  <div class="empty-state" style="padding:48px 16px;text-align:center;">
-    <div style="font-size:2rem;margin-bottom:12px;">🔔</div>
-    <div style="font-weight:600;margin-bottom:6px;color:var(--fg);">Notifications</div>
-    <div style="color:var(--dim);font-size:0.85rem;">Due date reminders, spend alerts, and agent updates will appear here.</div>
-  </div>
-</div>
-
 <div id="files-view" style="display:none;flex-direction:column;flex:1;min-height:0;">
   <!-- Toolbar -->
   <div class="fe-toolbar">
@@ -7269,6 +7267,78 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     </div>
   </div>
 </div>
+<!-- Map / Pins view -->
+<div id="map-view" style="display:none;">
+  <div class="map-sidebar" id="map-sidebar">
+    <div class="map-sidebar-hdr">
+      <span class="map-sidebar-hdr-title">&#x1F4CD; My Map</span>
+      <div class="map-sidebar-hdr-btns">
+        <button class="btn" style="padding:3px 8px;font-size:0.78rem;" onclick="_mapAddPin()" title="Drop a pin on the map">+ Pin</button>
+        <button class="btn" style="padding:3px 7px;font-size:0.85rem;" onclick="_mapToggleSidebar()" title="Collapse sidebar">&#x25C0;</button>
+      </div>
+    </div>
+    <div class="map-sidebar-section">
+      <div class="map-section-hdr">
+        <span>Tags</span>
+        <button class="btn" style="padding:1px 7px;font-size:0.72rem;" onclick="_mapAddTag()">+ Tag</button>
+      </div>
+      <div class="map-tag-chips" id="map-tag-list"></div>
+    </div>
+    <div class="map-search-section">
+      <input type="search" id="map-search" placeholder="Search pins&#x2026;" oninput="_mapSearch(this.value)" autocomplete="off">
+    </div>
+    <div id="map-pin-list" class="map-pin-list"></div>
+  </div>
+  <button class="map-open-btn" id="map-open-btn" onclick="_mapToggleSidebar()" title="Open sidebar">&#x25B6;</button>
+  <div class="map-main">
+    <div id="map-container"></div>
+    <div class="map-drop-hint" id="map-drop-hint">&#x1F4CD; Click anywhere on the map to place a pin &mdash; Esc to cancel</div>
+    <div class="map-toolbar">
+      <button class="btn map-drop-btn" id="map-drop-btn" onclick="_mapToggleDropMode()" style="font-size:0.78rem;padding:3px 9px;" title="Drop a pin by clicking the map">&#x1F4CD; Drop Pin</button>
+      <button class="btn" onclick="_mapLocateMe()" style="font-size:0.78rem;padding:3px 9px;" title="Center map on my location">&#x25CE; Locate Me</button>
+      <button class="btn" onclick="_mapSetDefaultView()" style="font-size:0.78rem;padding:3px 9px;" title="Save current zoom/center as default">&#x1F4BE; Save View</button>
+      <span class="map-coords" id="map-coords"></span>
+    </div>
+  </div>
+</div>
+<!-- Map: Add/Edit Pin Modal -->
+<div class="map-modal" id="map-pin-modal" onclick="if(event.target===this)_mapClosePinModal()">
+  <div class="map-modal-box">
+    <div class="map-modal-title" id="map-pin-modal-title">Add Pin</div>
+    <input id="map-pin-name" class="map-modal-input" placeholder="Name *" autocomplete="off">
+    <textarea id="map-pin-desc" class="map-modal-textarea" placeholder="Description (optional)" rows="2"></textarea>
+    <div class="map-modal-label">Coordinates</div>
+    <div class="map-modal-row">
+      <input id="map-pin-lat" class="map-modal-input" placeholder="Latitude" type="number" step="any">
+      <input id="map-pin-lng" class="map-modal-input" placeholder="Longitude" type="number" step="any">
+    </div>
+    <div class="map-modal-hint" id="map-pin-coords-hint"></div>
+    <div class="map-modal-label">Tags</div>
+    <div class="map-modal-tags-row" id="map-pin-tags-row"></div>
+    <div class="map-modal-actions">
+      <button class="btn" onclick="_mapSavePin()">Save</button>
+      <button class="btn" style="background:transparent;border:1px solid var(--border);" onclick="_mapClosePinModal()">Cancel</button>
+      <button class="btn map-btn-danger" id="map-pin-delete-btn" onclick="_mapDeletePin()" style="display:none;margin-left:auto;">Delete</button>
+    </div>
+  </div>
+</div>
+<!-- Map: Add/Edit Tag Modal -->
+<div class="map-modal" id="map-tag-modal" onclick="if(event.target===this)_mapCloseTagModal()">
+  <div class="map-modal-box">
+    <div class="map-modal-title" id="map-tag-modal-title">New Tag</div>
+    <input id="map-tag-name" class="map-modal-input" placeholder="Tag name *" autocomplete="off">
+    <div class="map-tag-color-row">
+      <label>Color:</label>
+      <input type="color" id="map-tag-color" value="#58a6ff">
+      <span id="map-tag-color-preview" style="font-size:0.82rem;color:var(--dim)"></span>
+    </div>
+    <div class="map-modal-actions">
+      <button class="btn" onclick="_mapSaveTag()">Save</button>
+      <button class="btn" style="background:transparent;border:1px solid var(--border);" onclick="_mapCloseTagModal()">Cancel</button>
+      <button class="btn map-btn-danger" id="map-tag-delete-btn" onclick="_mapDeleteTag()" style="display:none;margin-left:auto;">Delete</button>
+    </div>
+  </div>
+</div>
 <!-- CRM log interaction modal -->
 <div class="crm-log-modal" id="crm-log-modal" onclick="if(event.target===this)_crmCloseLog()">
   <div class="crm-log-box">
@@ -7503,10 +7573,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     </div>
     <div class="field-group">
       <label class="field-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-        <input type="checkbox" id="create-branch-enabled" onchange="_toggleCreateBranch(this.checked)" style="width:auto;margin:0;">
-        Branch name <span class="field-optional">(optional — auto-created for git repos)</span>
+        <input type="checkbox" id="create-branch-enabled" checked onchange="_toggleCreateBranch(this.checked)" style="width:auto;margin:0;">
+        Create branch <span class="field-optional">(uncheck to work directly on main)</span>
       </label>
-      <div id="create-branch-wrap" style="display:none;margin-top:8px;">
+      <div id="create-branch-wrap" style="margin-top:8px;">
         <div style="display:flex;gap:6px;align-items:center;">
           <input id="create-branch" type="text" placeholder="session/my-project" autocomplete="off" autocorrect="off" style="flex:1;" oninput="_onBranchInput(this.value)">
           <button class="btn" id="create-branch-suggest-btn" onclick="_suggestBranch()" title="Ask Claude to suggest branch names" style="flex-shrink:0;font-size:0.9rem;">✨</button>
@@ -7582,7 +7652,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
           <div class="chip" onclick="peekQuickKeys('Enter')">Enter</div>
           <div class="chip" onclick="peekQuickKeys('Up')">&#x2191;</div>
           <div class="chip" onclick="peekQuickKeys('Down')">&#x2193;</div>
-          <div class="chip" id="peek-git-push-btn" onclick="peekGitPush()">Push</div>
+          <div class="chip" onclick="gitPush(peekSession,event)">&#x2B06; Push</div>
           <div class="chip" onclick="peekQuickSend('/status')">/status</div>
           <div class="chip" onclick="peekQuickSend('/model')">/model</div>
           <div class="chip" onclick="peekQuickSend('/mcp')">/mcp</div>
@@ -7605,7 +7675,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
           style="display:none" onchange="handlePeekFileInput(event)">
         <label for="peek-file-input" class="peek-attach-btn" title="Attach file">&#128206;</label>
         <button id="peek-mic-btn" class="peek-attach-btn" title="Dictate" onclick="toggleMic()" style="display:none;">&#127908;</button>
-        <button class="btn" id="peek-push-btn" onclick="gitPush(peekSession,event)" title="Commit, merge to main, push" style="font-size:0.75rem;">&#x2B06; Push</button>
         <button class="btn primary" onclick="sendPeekCmd()">Send</button>
       </div>
       <!-- Drag-over hint (shown by CSS when drag-over class is on peek-overlay) -->
@@ -8889,7 +8958,7 @@ function render() {
       </div>
       ${s.dir ? `<div class="card-dir"><span class="card-dir-path" onclick="event.stopPropagation();openExplore('${s.dir.replace(/'/g,"\\'")}','${s.name.replace(/'/g,"\\'")}')" style="cursor:pointer;" title="Browse files">${esc(s.dir)}</span></div>` : ''}
       ${s.creator ? `<div class="card-dir" style="font-size:0.72rem;">${esc(s.creator)}</div>` : ''}
-      ${s.dir ? _renderBranchBadge(s.name, s.worktree) : ''}
+      ${s.dir ? _renderBranchBadge(s.name, s.branch) : ''}
       ${isExp && s.desc ? `<div class="card-desc">${esc(s.desc)}</div>` : ''}
       ${!isExp && s.task_name ? `<div class="card-preview">${esc(s.task_name)}</div>` : ''}
       ${isExp && s.preview ? `<div class="card-preview">${esc(s.preview)}</div>` : ''}
@@ -8923,6 +8992,7 @@ function render() {
           <div class="chip" onclick="doKeys('${s.name}','Enter')">Enter</div>
           <div class="chip" onclick="doKeys('${s.name}','Up')">&#x2191;</div>
           <div class="chip" onclick="doKeys('${s.name}','Down')">&#x2193;</div>
+          <div class="chip" onclick="gitPush('${s.name}',event)">&#x2B06; Push</div>
           <div class="chip" onclick="chipToInput('${s.name}','/status')">/status</div>
           <div class="chip" onclick="chipToInput('${s.name}','/model')">/model</div>
           <div class="chip" onclick="chipToInput('${s.name}','/mcp')">/mcp</div>
@@ -8937,7 +9007,6 @@ function render() {
             autocapitalize="sentences" spellcheck="true" enterkeyhint="enter"
             oninput="autoGrow(this);cardSlashAcUpdate('${s.name}');cmdHistoryReset()"
             onkeydown="cardSlashAcKeydown('${s.name}',event)"></textarea>
-          <button class="btn" onclick="gitPush('${s.name}',event)" title="Commit, merge to main, push" style="font-size:0.75rem;">&#x2B06; Push</button>
           <button class="btn primary" onclick="sendFromInput('${s.name}')">Send</button>
         </div>` : ''}
       </div>
@@ -9075,15 +9144,16 @@ function fmtDuration(sec) {
 // ═══════ GIT BRANCH AWARENESS ═══════
 function _isBranchMain(b) { return !b || b === 'main' || b === 'master' || b === 'dev' || b === 'develop'; }
 
-function _renderBranchBadge(name, isWorktree) {
+function _renderBranchBadge(name, sessionBranch) {
   const gi = gitInfo[name];
-  if (!gi || !gi.branch) return '';
-  const isMain = _isBranchMain(gi.branch);
-  const cls = gi._conflict ? 'conflict' : isMain ? 'on-main' : 'on-branch';
-  const tip = gi._conflict ? 'Another session shares this branch — risk of conflicts' : isMain ? 'On main — click to create a session branch' : (isWorktree ? 'Git worktree — isolated working copy' : 'On feature branch');
-  const conflictWarn = gi._conflict ? ' ⚠' : '';
-  const wtIcon = isWorktree ? '⬡ ' : '⎇ ';
-  return `<div class="card-dir"><span class="branch-badge ${cls}" onclick="event.stopPropagation();showBranchPopover('${name}',event)" title="${tip}">${wtIcon}${esc(gi.branch)}${conflictWarn}</span></div>`;
+  // Show session branch from config, or fall back to git-detected branch
+  const displayBranch = sessionBranch || (gi && gi.branch) || '';
+  if (!displayBranch) return '';
+  const isMain = _isBranchMain(displayBranch);
+  const cls = gi && gi._conflict ? 'conflict' : isMain ? 'on-main' : 'on-branch';
+  const tip = gi && gi._conflict ? 'Another session shares this branch — risk of conflicts' : isMain ? 'On main — click to create a session branch' : 'Session branch';
+  const conflictWarn = gi && gi._conflict ? ' ⚠' : '';
+  return `<div class="card-dir"><span class="branch-badge ${cls}" onclick="event.stopPropagation();showBranchPopover('${name}',event)" title="${tip}">⎇ ${esc(displayBranch)}${conflictWarn}</span></div>`;
 }
 
 async function _fetchGitBranches(sess) {
@@ -9100,10 +9170,14 @@ async function _fetchGitBranches(sess) {
     if (r.status === 'fulfilled' && r.value.name) newInfo[r.value.name] = r.value;
   }
   // Detect conflicts: two sessions on same branch in same repo
+  // Use session's CC_BRANCH if set (sessions have their own branch even if repo is on main)
   const byKey = {};
   for (const [n, gi] of Object.entries(newInfo)) {
-    if (!gi.branch || !gi.repo) continue;
-    const key = gi.repo + '::' + gi.branch;
+    if (!gi.repo) continue;
+    const sess = (sessions || []).find(s => s.name === n);
+    const effectiveBranch = (sess && sess.branch) || gi.branch;
+    if (!effectiveBranch) continue;
+    const key = gi.repo + '::' + effectiveBranch;
     (byKey[key] = byKey[key] || []).push(n);
   }
   for (const names of Object.values(byKey)) {
@@ -9119,12 +9193,20 @@ function showBranchPopover(name, e) {
   e.stopPropagation();
   document.querySelectorAll('.branch-popover').forEach(p => p.remove());
   const gi = gitInfo[name] || {};
-  const isMain = _isBranchMain(gi.branch);
-  const suggested = 'session/' + name;
+  const sess = sessions.find(s => s.name === name);
+  const sessionBranch = sess && sess.branch;
+  const displayBranch = sessionBranch || gi.branch || '';
+  const hasBranch = sessionBranch || !_isBranchMain(gi.branch);
   const pop = document.createElement('div');
   pop.className = 'branch-popover';
   pop.onclick = ev => ev.stopPropagation();
-  if (isMain) {
+  if (hasBranch) {
+    pop.innerHTML = `
+      <div style="font-size:0.75rem;color:var(--dim);margin-bottom:6px;font-weight:600;">⎇ ${esc(displayBranch)}</div>
+      ${gi._conflict ? '<div style="font-size:0.78rem;color:var(--red);margin-bottom:6px;">⚠ Another session shares this branch — conflicts possible</div>' : '<div style="font-size:0.78rem;color:var(--green);margin-bottom:6px;">✓ Isolated on session branch</div>'}
+      <button class="btn" style="width:100%;" onclick="document.querySelectorAll('.branch-popover').forEach(p=>p.remove())">Close</button>`;
+  } else {
+    const suggested = 'session/' + name;
     pop.innerHTML = `
       <div style="font-size:0.75rem;color:var(--dim);margin-bottom:8px;font-weight:600;">⎇ Create session branch</div>
       <div style="font-size:0.78rem;color:var(--dim);margin-bottom:8px;">Isolate changes from other sessions on <strong>${esc(gi.branch || 'main')}</strong></div>
@@ -9133,11 +9215,6 @@ function showBranchPopover(name, e) {
         <button class="btn primary" style="flex:1;" onclick="doCreateBranch('${name}')">Create &amp; checkout</button>
         <button class="btn" onclick="document.querySelectorAll('.branch-popover').forEach(p=>p.remove())">✕</button>
       </div>`;
-  } else {
-    pop.innerHTML = `
-      <div style="font-size:0.75rem;color:var(--dim);margin-bottom:6px;font-weight:600;">⎇ ${esc(gi.branch)}</div>
-      ${gi._conflict ? '<div style="font-size:0.78rem;color:var(--red);margin-bottom:6px;">⚠ Another session shares this branch — conflicts possible</div>' : '<div style="font-size:0.78rem;color:var(--green);margin-bottom:6px;">✓ Isolated on feature branch</div>'}
-      <button class="btn" style="width:100%;" onclick="document.querySelectorAll('.branch-popover').forEach(p=>p.remove())">Close</button>`;
   }
   // Append to body to escape card's overflow:hidden
   document.body.appendChild(pop);
@@ -9283,6 +9360,7 @@ const ALL_TABS = [
   { id: 'email',         label: 'Email' },
   { id: 'notes',         label: 'Notes' },
   { id: 'crm',           label: 'People' },
+  { id: 'map',           label: 'Map' },
 ];
 
 let hiddenTabs = (function() {
@@ -9912,6 +9990,9 @@ async function loadPeekGit() {
   try {
     const r = await fetch(API + '/api/sessions/' + encodeURIComponent(peekSession) + '/git?detail=1');
     const d = await r.json();
+    // Merge session branch from sessions list if not in git response
+    const sess = sessions.find(s => s.name === peekSession);
+    if (sess && sess.branch && !d.session_branch) d.session_branch = sess.branch;
     _peekGitData = d;
     _renderPeekGit(d);
   } catch(e) {
@@ -9928,10 +10009,10 @@ function _renderPeekGit(d) {
   if (!d.branch) { empty.style.display = ''; content.style.display = 'none'; return; }
   empty.style.display = 'none';
 
-  // Header
-  const icon = d.worktree ? '⬡' : '⎇';
-  document.getElementById('peek-git-branch').textContent = icon + ' ' + d.branch;
-  document.getElementById('peek-git-worktree-badge').style.display = d.worktree ? '' : 'none';
+  // Header — show session branch if set, otherwise git-detected branch
+  const displayBranch = d.session_branch || d.branch;
+  document.getElementById('peek-git-branch').textContent = '⎇ ' + displayBranch;
+  document.getElementById('peek-git-worktree-badge').style.display = 'none';
   const unpushed = d.unpushed || 0;
   document.getElementById('peek-git-push-btn').textContent = unpushed ? `Push (${unpushed})` : 'Push';
   const prBtn = document.getElementById('peek-git-pr-btn');
@@ -12733,8 +12814,8 @@ function openCreate() {
   document.getElementById('create-dir').value = (_filesCwd && _filesCwd !== '/') ? _filesCwd : (window._cloudEmail ? '/root' : '');
   document.getElementById('create-prompt').value = '';
   document.getElementById('create-branch').value = '';
-  document.getElementById('create-branch-enabled').checked = false;
-  document.getElementById('create-branch-wrap').style.display = 'none';
+  document.getElementById('create-branch-enabled').checked = true;
+  document.getElementById('create-branch-wrap').style.display = '';
   document.getElementById('create-branch-suggestions').style.display = 'none';
   document.getElementById('create-branch-suggestions').innerHTML = '';
   document.getElementById('ac-list').innerHTML = '';
@@ -12921,11 +13002,24 @@ async function submitCreate() {
         body: JSON.stringify({ template_id: _selectedTemplate.id, dir }),
       }).catch(() => {});
     }
-    // Create branch (and optionally worktree) if requested
+    // Save branch preference: custom name, auto (default), or none
     if (branch && dir) {
+      // Custom branch name — create it and save to config
       await fetch(API + '/api/sessions/' + encodeURIComponent(name) + '/git', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({branch, create: true}),
+      }).catch(() => {});
+      await fetch(API + '/api/sessions/' + encodeURIComponent(name) + '/config', {
+        method: 'PATCH', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({branch}),
+      }).catch(() => {});
+    } else if (branchEnabled && !branch && dir) {
+      // Checkbox on but no custom name — auto-create will handle it
+    } else if (!branchEnabled && dir) {
+      // Explicitly no branch — work on main
+      await fetch(API + '/api/sessions/' + encodeURIComponent(name) + '/config', {
+        method: 'PATCH', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({branch: 'none'}),
       }).catch(() => {});
     }
     // Always start the session immediately
@@ -13251,16 +13345,8 @@ function _pwaCb(e) {
       || document.getElementById('search');
     if (!target) return false;
 
-    // If the target is already focused, use execCommand('paste') — it routes through
-    // the OS clipboard directly without triggering the Web Clipboard API permission
-    // dialog, and avoids the error sound from blocked native paste in Chrome PWA.
-    if (target === document.activeElement) {
-      e.preventDefault();
-      try { document.execCommand('paste'); } catch (_) {
-        if (navigator.clipboard?.readText) _pasteTextInto(target);
-      }
-      return true;
-    }
+    // If the target is already focused, let the browser handle Cmd+V natively.
+    if (target === document.activeElement) return false;
     if (!navigator.clipboard?.readText) return false;
     e.preventDefault();
     // Try clipboard.read() first for image/file paste support in peek
@@ -13758,32 +13844,28 @@ function switchView(view) {
   activeView = view;
   document.getElementById('session-view').style.display = view === 'sessions' ? '' : 'none';
   document.getElementById('board-view').style.display = view === 'board' ? '' : 'none';
-  document.getElementById('calendar-view').style.display = view === 'calendar' ? '' : 'none';
   document.getElementById('scheduler-view').style.display = view === 'scheduler' ? '' : 'none';
-  document.getElementById('reports-view').style.display = view === 'reports' ? '' : 'none';
-  document.getElementById('notifications-view').style.display = view === 'notifications' ? '' : 'none';
   document.getElementById('files-view').style.display = view === 'files' ? 'flex' : 'none';
   document.getElementById('browser-view').style.display = view === 'browser' ? 'flex' : 'none';
   document.getElementById('logs-view').style.display = view === 'logs' ? 'flex' : 'none';
   document.getElementById('email-view').style.display = view === 'email' ? '' : 'none';
   document.getElementById('notes-view').style.display = view === 'notes' ? 'flex' : 'none';
   document.getElementById('crm-view').style.display = view === 'crm' ? 'flex' : 'none';
+  document.getElementById('map-view').style.display = view === 'map' ? 'flex' : 'none';
   document.getElementById('tab-sessions').classList.toggle('active', view === 'sessions');
   document.getElementById('tab-board').classList.toggle('active', view === 'board');
-  document.getElementById('tab-calendar').classList.toggle('active', view === 'calendar');
   document.getElementById('tab-scheduler').classList.toggle('active', view === 'scheduler');
-  document.getElementById('tab-reports').classList.toggle('active', view === 'reports');
-  document.getElementById('tab-notifications').classList.toggle('active', view === 'notifications');
   document.getElementById('tab-files').classList.toggle('active', view === 'files');
   document.getElementById('tab-browser').classList.toggle('active', view === 'browser');
   document.getElementById('tab-logs').classList.toggle('active', view === 'logs');
   document.getElementById('tab-email').classList.toggle('active', view === 'email');
   document.getElementById('tab-notes').classList.toggle('active', view === 'notes');
   document.getElementById('tab-crm').classList.toggle('active', view === 'crm');
+  document.getElementById('tab-map').classList.toggle('active', view === 'map');
   if (view === 'crm') { _crmDirty = false; _crmLoad(); } // always refresh on tab switch
+  if (view === 'map') { _mapLoad(); _mapInit(); }
   if (view === 'files') loadFiles(_filesPath);
   else { try { if (location.hash.startsWith('#path=')) history.replaceState({}, '', location.pathname); } catch(e) {} }
-  if (view === 'reports') fetchReports();
   if (view === 'browser') _rbLoadProfiles();
   if (view === 'email') _emailLoad();
   if (view === 'notes') {
@@ -13805,6 +13887,357 @@ function switchView(view) {
     if (boardTimer) { clearInterval(boardTimer); boardTimer = null; }
   }
 }
+
+// ── Map tab ───────────────────────────────────────────────────────────────────
+let _map = null;
+let _mapPins = [];
+let _mapTags = [];
+let _mapSettings = { defaultZoom: 12, defaultLat: 40.7128, defaultLng: -74.0060, sidebarOpen: true };
+let _mapFilterTags = new Set();
+let _mapSearchQ = '';
+let _mapMarkers = {};
+let _mapDropMode = false;
+let _mapEditingPin = null;
+let _mapEditingTag = null;
+
+function _mapLoad() {
+  try { _mapPins = JSON.parse(localStorage.getItem('amux_map_pins') || '[]'); } catch(e) { _mapPins = []; }
+  try { _mapTags = JSON.parse(localStorage.getItem('amux_map_tags') || '[]'); } catch(e) { _mapTags = []; }
+  try { const s = localStorage.getItem('amux_map_settings'); if (s) _mapSettings = {..._mapSettings, ...JSON.parse(s)}; } catch(e) {}
+}
+
+function _mapSave() {
+  localStorage.setItem('amux_map_pins', JSON.stringify(_mapPins));
+  localStorage.setItem('amux_map_tags', JSON.stringify(_mapTags));
+  localStorage.setItem('amux_map_settings', JSON.stringify(_mapSettings));
+}
+
+function _mapInit() {
+  if (!document.getElementById('map-container')) return;
+  if (!_map) {
+    _map = L.map('map-container', {
+      center: [_mapSettings.defaultLat, _mapSettings.defaultLng],
+      zoom: _mapSettings.defaultZoom,
+      zoomControl: true
+    });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '\u00a9 <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      maxZoom: 19
+    }).addTo(_map);
+    _map.on('click', function(e) {
+      if (_mapDropMode) {
+        _mapExitDropMode();
+        _mapOpenPinModal(null, e.latlng);
+      } else {
+        document.getElementById('map-coords').textContent = e.latlng.lat.toFixed(5) + ', ' + e.latlng.lng.toFixed(5);
+      }
+    });
+    _map.on('movestart', function() {
+      document.getElementById('map-coords').textContent = '';
+    });
+  } else {
+    setTimeout(function() { _map.invalidateSize(); }, 50);
+  }
+  _mapApplySidebarState();
+  _mapRenderTags();
+  _mapRenderPins();
+  _mapRenderMarkers();
+}
+
+function _mapPinColor(pin) {
+  if (!pin.tags || pin.tags.length === 0) return '#8b949e';
+  const tag = _mapTags.find(function(t) { return t.id === pin.tags[0]; });
+  return tag ? tag.color : '#8b949e';
+}
+
+function _mapMakeIcon(pin) {
+  const color = _mapPinColor(pin);
+  return L.divIcon({
+    className: '',
+    html: '<div style="width:14px;height:14px;background:' + color + ';border:2px solid rgba(255,255,255,0.8);border-radius:50%;box-shadow:0 1px 5px rgba(0,0,0,0.5);cursor:pointer"></div>',
+    iconSize: [14, 14],
+    iconAnchor: [7, 7],
+    popupAnchor: [0, -10]
+  });
+}
+
+function _mapVisiblePins() {
+  return _mapPins.filter(function(pin) {
+    if (_mapFilterTags.size > 0 && !(pin.tags && pin.tags.some(function(t) { return _mapFilterTags.has(t); }))) return false;
+    if (_mapSearchQ) {
+      const q = _mapSearchQ;
+      if (!(pin.name||'').toLowerCase().includes(q) && !(pin.desc||'').toLowerCase().includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function _mapRenderTags() {
+  const el = document.getElementById('map-tag-list');
+  if (!el) return;
+  const allActive = _mapFilterTags.size === 0;
+  let html = '<button class="map-tag-chip' + (allActive ? ' all-active' : '') + '" onclick="_mapFilterByTag(null)">All</button>';
+  _mapTags.forEach(function(tag) {
+    const active = _mapFilterTags.has(tag.id);
+    html += '<button class="map-tag-chip' + (active ? ' tag-active' : '') + '" style="' + (active ? 'background:' + tag.color + ';' : '--tag-color:' + tag.color + ';') + '" onclick="_mapFilterByTag(\x27' + tag.id + '\x27)" oncontextmenu="event.preventDefault();_mapEditTag(\x27' + tag.id + '\x27)" title="Right-click to edit">' + escHtml(tag.name) + '</button>';
+  });
+  el.innerHTML = html;
+}
+
+function _mapFilterByTag(tagId) {
+  if (tagId === null) { _mapFilterTags.clear(); }
+  else if (_mapFilterTags.has(tagId)) { _mapFilterTags.delete(tagId); }
+  else { _mapFilterTags.add(tagId); }
+  _mapRenderTags();
+  _mapRenderPins();
+  _mapRenderMarkers();
+}
+
+function _mapSearch(q) {
+  _mapSearchQ = q.toLowerCase();
+  _mapRenderPins();
+  _mapRenderMarkers();
+}
+
+function _mapRenderPins() {
+  const el = document.getElementById('map-pin-list');
+  if (!el) return;
+  const visible = _mapVisiblePins();
+  if (visible.length === 0) {
+    el.innerHTML = '<div class="map-empty">' + (_mapPins.length === 0 ? 'No pins yet.<br>Click &ldquo;+ Pin&rdquo; to add one.' : 'No pins match your filter.') + '</div>';
+    return;
+  }
+  el.innerHTML = visible.map(function(pin) {
+    const color = _mapPinColor(pin);
+    const tagChips = (pin.tags||[]).map(function(tid) {
+      const tag = _mapTags.find(function(t) { return t.id === tid; });
+      return tag ? '<span class="map-pin-tag" style="background:' + tag.color + '22;color:' + tag.color + ';border-color:' + tag.color + '55">' + escHtml(tag.name) + '</span>' : '';
+    }).join('');
+    return '<div class="map-pin-item" onclick="_mapFlyToPin(\x27' + pin.id + '\x27)" ondblclick="_mapOpenPinModal(\x27' + pin.id + '\x27)">' +
+      '<div class="map-pin-dot" style="background:' + color + '"></div>' +
+      '<div class="map-pin-info">' +
+        '<div class="map-pin-name">' + escHtml(pin.name||'Unnamed') + '</div>' +
+        (tagChips ? '<div class="map-pin-tagrow">' + tagChips + '</div>' : '') +
+        (pin.desc ? '<div class="map-pin-desc">' + escHtml(pin.desc.substring(0,70)) + (pin.desc.length>70?'\u2026':'') + '</div>' : '') +
+      '</div>' +
+      '<button class="map-pin-edit-btn" onclick="event.stopPropagation();_mapOpenPinModal(\x27' + pin.id + '\x27)" title="Edit">&#x270F;</button>' +
+    '</div>';
+  }).join('');
+}
+
+function _mapRenderMarkers() {
+  if (!_map) return;
+  Object.values(_mapMarkers).forEach(function(m) { m.remove(); });
+  _mapMarkers = {};
+  _mapVisiblePins().forEach(function(pin) {
+    if (isNaN(parseFloat(pin.lat)) || isNaN(parseFloat(pin.lng))) return;
+    const marker = L.marker([pin.lat, pin.lng], { icon: _mapMakeIcon(pin) }).addTo(_map);
+    const tagChips = (pin.tags||[]).map(function(tid) {
+      const tag = _mapTags.find(function(t) { return t.id === tid; });
+      return tag ? '<span style="display:inline-block;padding:1px 6px;border-radius:8px;font-size:11px;background:' + tag.color + '22;color:' + tag.color + '">' + escHtml(tag.name) + '</span>' : '';
+    }).join(' ');
+    marker.bindPopup(
+      '<div style="min-width:140px;font-family:inherit;font-size:13px">' +
+        '<div style="font-weight:600;margin-bottom:4px">' + escHtml(pin.name||'Unnamed') + '</div>' +
+        (pin.desc ? '<div style="font-size:12px;color:#888;margin-bottom:4px">' + escHtml(pin.desc) + '</div>' : '') +
+        (tagChips ? '<div style="margin-bottom:4px">' + tagChips + '</div>' : '') +
+        '<div style="font-size:11px;color:#999;margin-bottom:6px">' + parseFloat(pin.lat).toFixed(5) + ', ' + parseFloat(pin.lng).toFixed(5) + '</div>' +
+        '<button onclick="_mapOpenPinModal(\x27' + pin.id + '\x27)" style="padding:2px 8px;font-size:12px;cursor:pointer;border:1px solid #aaa;border-radius:4px;background:transparent;color:inherit">Edit</button>' +
+      '</div>'
+    );
+    _mapMarkers[pin.id] = marker;
+  });
+}
+
+function _mapFlyToPin(id) {
+  const pin = _mapPins.find(function(p) { return p.id === id; });
+  if (!pin || !_map) return;
+  _map.flyTo([pin.lat, pin.lng], Math.max(_map.getZoom(), 14), { duration: 0.8 });
+  setTimeout(function() { if (_mapMarkers[id]) _mapMarkers[id].openPopup(); }, 900);
+  document.querySelectorAll('.map-pin-item').forEach(function(el) { el.classList.remove('active'); });
+  const visible = _mapVisiblePins();
+  const idx = visible.findIndex(function(p) { return p.id === id; });
+  const items = document.querySelectorAll('.map-pin-item');
+  if (idx >= 0 && items[idx]) { items[idx].classList.add('active'); items[idx].scrollIntoView({block:'nearest'}); }
+}
+
+function _mapSetDefaultView() {
+  if (!_map) return;
+  const c = _map.getCenter();
+  _mapSettings.defaultLat = c.lat;
+  _mapSettings.defaultLng = c.lng;
+  _mapSettings.defaultZoom = _map.getZoom();
+  _mapSave();
+  const btn = document.querySelector('.map-toolbar .btn:nth-child(3)');
+  if (btn) { const o = btn.textContent; btn.textContent = '\u2713 Saved!'; setTimeout(function(){btn.textContent=o;},1500); }
+}
+
+function _mapLocateMe() {
+  if (!navigator.geolocation) { alert('Geolocation not supported by your browser.'); return; }
+  navigator.geolocation.getCurrentPosition(function(pos) {
+    if (_map) _map.flyTo([pos.coords.latitude, pos.coords.longitude], 14);
+  }, function() { alert('Could not get your location.'); });
+}
+
+function _mapToggleDropMode() {
+  if (_mapDropMode) { _mapExitDropMode(); } else { _mapEnterDropMode(); }
+}
+
+function _mapEnterDropMode() {
+  _mapDropMode = true;
+  const c = document.getElementById('map-container');
+  if (c) c.style.cursor = 'crosshair';
+  const btn = document.getElementById('map-drop-btn');
+  if (btn) btn.classList.add('dropping');
+  const hint = document.getElementById('map-drop-hint');
+  if (hint) hint.style.display = 'block';
+}
+
+function _mapExitDropMode() {
+  _mapDropMode = false;
+  const c = document.getElementById('map-container');
+  if (c) c.style.cursor = '';
+  const btn = document.getElementById('map-drop-btn');
+  if (btn) btn.classList.remove('dropping');
+  const hint = document.getElementById('map-drop-hint');
+  if (hint) hint.style.display = 'none';
+}
+
+function _mapAddPin() {
+  _mapEnterDropMode();
+}
+
+function _mapOpenPinModal(id, latlng) {
+  _mapEditingPin = id;
+  const pin = id ? _mapPins.find(function(p) { return p.id === id; }) : null;
+  document.getElementById('map-pin-modal-title').textContent = pin ? 'Edit Pin' : 'Add Pin';
+  document.getElementById('map-pin-name').value = pin ? (pin.name||'') : '';
+  document.getElementById('map-pin-desc').value = pin ? (pin.desc||'') : '';
+  document.getElementById('map-pin-lat').value = pin ? pin.lat : (latlng ? latlng.lat.toFixed(6) : '');
+  document.getElementById('map-pin-lng').value = pin ? pin.lng : (latlng ? latlng.lng.toFixed(6) : '');
+  const hint = document.getElementById('map-pin-coords-hint');
+  if (latlng) hint.textContent = '\uD83D\uDCCD Dropped at ' + latlng.lat.toFixed(5) + ', ' + latlng.lng.toFixed(5);
+  else hint.textContent = '';
+  const pinTags = pin ? (pin.tags||[]) : [];
+  const tagsRow = document.getElementById('map-pin-tags-row');
+  if (_mapTags.length === 0) {
+    tagsRow.innerHTML = '<span style="font-size:0.78rem;color:var(--dim)">No tags yet \u2014 add from sidebar</span>';
+  } else {
+    tagsRow.innerHTML = _mapTags.map(function(tag) {
+      const checked = pinTags.includes(tag.id);
+      return '<label class="map-tag-check' + (checked ? ' checked' : '') + '" style="--tag-color:' + tag.color + '" onclick="_mapToggleTagCheck(this)">' +
+        '<input type="checkbox" value="' + tag.id + '"' + (checked ? ' checked' : '') + '><span>' + escHtml(tag.name) + '</span></label>';
+    }).join('');
+  }
+  document.getElementById('map-pin-delete-btn').style.display = pin ? '' : 'none';
+  const modal = document.getElementById('map-pin-modal');
+  modal.style.display = 'flex';
+  setTimeout(function() { document.getElementById('map-pin-name').focus(); }, 50);
+}
+
+function _mapToggleTagCheck(label) {
+  const cb = label.querySelector('input');
+  cb.checked = !cb.checked;
+  label.classList.toggle('checked', cb.checked);
+}
+
+function _mapClosePinModal() {
+  document.getElementById('map-pin-modal').style.display = 'none';
+  _mapEditingPin = null;
+  _mapExitDropMode();
+}
+
+function _mapSavePin() {
+  const name = document.getElementById('map-pin-name').value.trim();
+  const desc = document.getElementById('map-pin-desc').value.trim();
+  const lat = parseFloat(document.getElementById('map-pin-lat').value);
+  const lng = parseFloat(document.getElementById('map-pin-lng').value);
+  if (!name) { document.getElementById('map-pin-name').focus(); return; }
+  if (isNaN(lat) || isNaN(lng)) { alert('Please enter valid coordinates.'); return; }
+  const tags = Array.from(document.querySelectorAll('#map-pin-tags-row input[type=checkbox]:checked')).map(function(cb) { return cb.value; });
+  if (_mapEditingPin) {
+    const pin = _mapPins.find(function(p) { return p.id === _mapEditingPin; });
+    if (pin) { pin.name=name; pin.desc=desc; pin.lat=lat; pin.lng=lng; pin.tags=tags; }
+  } else {
+    _mapPins.push({ id: 'pin_'+Date.now(), name: name, desc: desc, lat: lat, lng: lng, tags: tags, createdAt: Date.now() });
+  }
+  _mapSave(); _mapClosePinModal(); _mapRenderPins(); _mapRenderMarkers();
+}
+
+function _mapDeletePin() {
+  if (!_mapEditingPin || !confirm('Delete this pin?')) return;
+  _mapPins = _mapPins.filter(function(p) { return p.id !== _mapEditingPin; });
+  _mapSave(); _mapClosePinModal(); _mapRenderPins(); _mapRenderMarkers();
+}
+
+function _mapAddTag() { _mapOpenTagModal(null); }
+function _mapEditTag(id) { _mapOpenTagModal(id); }
+
+function _mapOpenTagModal(id) {
+  _mapEditingTag = id;
+  const tag = id ? _mapTags.find(function(t) { return t.id === id; }) : null;
+  document.getElementById('map-tag-modal-title').textContent = tag ? 'Edit Tag' : 'New Tag';
+  document.getElementById('map-tag-name').value = tag ? tag.name : '';
+  document.getElementById('map-tag-color').value = tag ? tag.color : '#' + Math.floor(Math.random()*0xffffff).toString(16).padStart(6,'0');
+  document.getElementById('map-tag-delete-btn').style.display = tag ? '' : 'none';
+  document.getElementById('map-tag-modal').style.display = 'flex';
+  setTimeout(function() { document.getElementById('map-tag-name').focus(); }, 50);
+}
+
+function _mapCloseTagModal() {
+  document.getElementById('map-tag-modal').style.display = 'none';
+  _mapEditingTag = null;
+}
+
+function _mapSaveTag() {
+  const name = document.getElementById('map-tag-name').value.trim();
+  const color = document.getElementById('map-tag-color').value;
+  if (!name) { document.getElementById('map-tag-name').focus(); return; }
+  if (_mapEditingTag) {
+    const tag = _mapTags.find(function(t) { return t.id === _mapEditingTag; });
+    if (tag) { tag.name=name; tag.color=color; }
+  } else {
+    _mapTags.push({ id: 'tag_'+Date.now(), name: name, color: color });
+  }
+  _mapSave(); _mapCloseTagModal(); _mapRenderTags(); _mapRenderPins(); _mapRenderMarkers();
+}
+
+function _mapDeleteTag() {
+  if (!_mapEditingTag || !confirm('Delete this tag? It will be removed from all pins.')) return;
+  _mapPins.forEach(function(pin) { pin.tags = (pin.tags||[]).filter(function(t) { return t !== _mapEditingTag; }); });
+  _mapTags = _mapTags.filter(function(t) { return t.id !== _mapEditingTag; });
+  _mapFilterTags.delete(_mapEditingTag);
+  _mapSave(); _mapCloseTagModal(); _mapRenderTags(); _mapRenderPins(); _mapRenderMarkers();
+}
+
+function _mapToggleSidebar() {
+  _mapSettings.sidebarOpen = !_mapSettings.sidebarOpen;
+  _mapSave();
+  _mapApplySidebarState();
+  if (_map) setTimeout(function() { _map.invalidateSize(); }, 310);
+}
+
+function _mapApplySidebarState() {
+  const sidebar = document.getElementById('map-sidebar');
+  const openBtn = document.getElementById('map-open-btn');
+  if (!sidebar) return;
+  if (_mapSettings.sidebarOpen) {
+    sidebar.classList.remove('hidden');
+    sidebar.style.display = '';
+    if (openBtn) openBtn.style.display = 'none';
+  } else {
+    sidebar.classList.add('hidden');
+    if (openBtn) openBtn.style.display = 'block';
+    // On mobile, hide after animation
+    setTimeout(function() {
+      if (!_mapSettings.sidebarOpen) sidebar.style.display = 'none';
+    }, 260);
+  }
+}
+
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && _mapDropMode) _mapExitDropMode();
+});
 
 // ── Logs tab ──────────────────────────────────────────────────────────────────
 function escHtml(s) {
@@ -15467,7 +15900,7 @@ function enterGridMode() {
   }
   view.classList.add('active');
   // Mark Grid tab as active, deactivate others
-  ['sessions','board','calendar','reports','notifications'].forEach(t => document.getElementById('tab-' + t)?.classList.remove('active'));
+  ['sessions','board','scheduler','files','logs','browser','email','notes','crm'].forEach(t => document.getElementById('tab-' + t)?.classList.remove('active'));
   document.getElementById('tab-grid').classList.add('active');
   _renderGridChips();
   _wsRenderProfileBar();
@@ -17948,6 +18381,7 @@ async function _emailDismiss(id) {
 <script src="https://cdn.jsdelivr.net/npm/quilljs-markdown@latest/dist/quilljs-markdown.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gridstack@7/dist/gridstack-all.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <div id="grid-view">
   <div class="grid-toolbar">
     <span class="grid-toolbar-title">Workspace</span>
@@ -20682,14 +21116,20 @@ p{{color:#888;margin:12px 0 28px;font-size:0.9rem;line-height:1.5}}
                 steps = []
                 errors = []
                 try:
-                    # 1. Stage all changes
-                    r = subprocess.run(["git", "-C", wd, "add", "-A"],
+                    # 1. Checkout session branch (commits must go here, not main)
+                    r = subprocess.run(["git", "-C", wd, "checkout", branch],
                                        capture_output=True, text=True, timeout=10)
-                    # 2. Check if there's anything to commit
+                    if r.returncode != 0:
+                        errors.append(f"checkout {branch} failed: {r.stderr.strip()}")
+                        return self._json({"ok": False, "steps": steps, "errors": errors}, 400)
+                    steps.append(f"on {branch}")
+                    # 2. Stage all changes
+                    subprocess.run(["git", "-C", wd, "add", "-A"],
+                                   capture_output=True, text=True, timeout=10)
+                    # 3. Commit if there are staged changes
                     r = subprocess.run(["git", "-C", wd, "diff", "--cached", "--quiet"],
                                        capture_output=True, text=True, timeout=5)
                     if r.returncode != 0:
-                        # There are staged changes — commit them
                         r = subprocess.run(["git", "-C", wd, "commit", "-m",
                                             f"session {name}: auto-commit before merge"],
                                            capture_output=True, text=True, timeout=15)
@@ -20699,36 +21139,36 @@ p{{color:#888;margin:12px 0 28px;font-size:0.9rem;line-height:1.5}}
                             errors.append(f"commit failed: {r.stderr.strip()}")
                     else:
                         steps.append("nothing to commit")
-                    # 3. Checkout main
+                    # 4. Checkout main
                     r = subprocess.run(["git", "-C", wd, "checkout", "main"],
                                        capture_output=True, text=True, timeout=10)
                     if r.returncode != 0:
                         errors.append(f"checkout main failed: {r.stderr.strip()}")
-                        # Try to go back
                         subprocess.run(["git", "-C", wd, "checkout", branch],
                                        capture_output=True, text=True, timeout=5)
                         return self._json({"ok": False, "steps": steps, "errors": errors}, 400)
-                    steps.append("checked out main")
-                    # 4. Merge session branch
+                    # 5. Pull latest main before merging
+                    subprocess.run(["git", "-C", wd, "pull", "--ff-only", "origin", "main"],
+                                   capture_output=True, text=True, timeout=15)
+                    # 6. Merge session branch into main
                     r = subprocess.run(["git", "-C", wd, "merge", branch],
                                        capture_output=True, text=True, timeout=15)
                     if r.returncode != 0:
                         errors.append(f"merge failed: {r.stderr.strip()}")
-                        # Abort merge and go back
                         subprocess.run(["git", "-C", wd, "merge", "--abort"],
                                        capture_output=True, text=True, timeout=5)
                         subprocess.run(["git", "-C", wd, "checkout", branch],
                                        capture_output=True, text=True, timeout=5)
                         return self._json({"ok": False, "steps": steps, "errors": errors}, 400)
                     steps.append(f"merged {branch}")
-                    # 5. Push
+                    # 7. Push main to origin
                     r = subprocess.run(["git", "-C", wd, "push", "origin", "main"],
                                        capture_output=True, text=True, timeout=30)
                     if r.returncode == 0:
                         steps.append("pushed to origin/main")
                     else:
                         errors.append(f"push failed: {r.stderr.strip()}")
-                    # 6. Go back to session branch (stays alive for future work)
+                    # 8. Go back to session branch for future work
                     subprocess.run(["git", "-C", wd, "checkout", branch],
                                    capture_output=True, text=True, timeout=5)
                     steps.append(f"back on {branch}")
@@ -20994,6 +21434,12 @@ p{{color:#888;margin:12px 0 28px;font-size:0.9rem;line-height:1.5}}
                     cfg["CC_PINNED"] = "" if cfg.get("CC_PINNED") == "1" else "1"
                     _write_env(env_file, cfg)
                     return self._json({"ok": True, "message": "pin toggled"})
+
+                # Set branch
+                if "branch" in body:
+                    cfg["CC_BRANCH"] = body["branch"].strip()
+                    _write_env(env_file, cfg)
+                    return self._json({"ok": True, "message": "branch updated"})
 
                 # Set tags
                 if "tags" in body:
