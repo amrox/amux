@@ -7607,9 +7607,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <!-- Two-panel body -->
       <div class="git-panel-body">
         <!-- Left: file list -->
-        <div class="git-files-list" id="peek-git-files-list">
-          <div class="git-no-changes" id="peek-git-no-changes" style="display:none;">No changes</div>
-        </div>
+        <div class="git-files-list" id="peek-git-files-list"></div>
         <!-- Right: diff viewer -->
         <div id="peek-git-diff-viewer" class="git-diff-viewer">
           <div class="git-diff-back-btn" onclick="_gitDiffBack()">&#8592; Files</div>
@@ -9870,7 +9868,6 @@ function _renderPeekGit(d) {
   // Render file list
   const listEl = document.getElementById('peek-git-files-list');
   listEl.innerHTML = '';
-  document.getElementById('peek-git-no-changes').style.display = 'none';
 
   // Commits ahead
   const ahead = d.ahead || [];
@@ -9910,7 +9907,10 @@ function _renderPeekGit(d) {
       listEl.appendChild(el);
     });
   } else if (!ahead.length) {
-    document.getElementById('peek-git-no-changes').style.display = '';
+    const nc = document.createElement('div');
+    nc.className = 'git-no-changes';
+    nc.textContent = 'No changes';
+    listEl.appendChild(nc);
   }
 
   // Reset diff panel
