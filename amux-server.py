@@ -182,6 +182,8 @@ def _classify_request(method: str, path: str) -> tuple:
 
 # Auto-recovery state
 _sse_alerts: list = []           # ring buffer of alert dicts pushed to all SSE clients
+_notes_version: int = 0             # bumped on any notes write; triggers SSE invalidation
+_crm_version: int = 0               # bumped on any CRM write; triggers SSE invalidation
 _sse_alert_lock = threading.Lock()
 _send_locks: dict = {}          # per-session locks for serializing send_text/send_keys
 _send_locks_lock = threading.Lock()  # protects _send_locks dict itself
@@ -8642,6 +8644,8 @@ let lastSessionsJSON = '';
 // ── Session notifications ──
 const _prevSessionState = {};  // name → {status, running}
 let _notifsEnabled = localStorage.getItem('amux_notifs') === '1';
+let _notesDirty = false;  // set by SSE invalidate when not on notes tab
+let _crmDirty   = false;  // set by SSE invalidate when not on crm tab
 
 function _updateNotifBtn() {
   const btn = document.getElementById('notif-btn');
@@ -13756,7 +13760,7 @@ function switchView(view) {
   document.getElementById('tab-email').classList.toggle('active', view === 'email');
   document.getElementById('tab-notes').classList.toggle('active', view === 'notes');
   document.getElementById('tab-crm').classList.toggle('active', view === 'crm');
-  if (view === 'crm') { if (!_crmContacts.length) _crmLoad(); else _crmRenderList(_crmContacts); }
+  if (view === 'crm') { _crmDirty = false; _crmLoad(); } // always refresh on tab switch
   if (view === 'files') loadFiles(_filesPath);
   else { try { if (location.hash.startsWith('#path=')) history.replaceState({}, '', location.pathname); } catch(e) {} }
   if (view === 'reports') fetchReports();
@@ -13764,15 +13768,8 @@ function switchView(view) {
   if (view === 'email') _emailLoad();
   if (view === 'notes') {
     _notesInitQuill(); _notesApplySidebarState();
-    if (!_notesAllNotes.length) { _notesLoad(); }
-    else {
-      _notesRenderList(_notesAllNotes);
-      if (!_notesActive && _notesAllNotes.length > 0) {
-        const lastPath = localStorage.getItem('amux_last_note');
-        const lastNote = lastPath && _notesAllNotes.find(n => n.path === lastPath);
-        _notesOpen(lastNote ? lastNote.path : _notesAllNotes[0].path);
-      }
-    }
+    _notesDirty = false;
+    _notesLoad(); // always refresh list on tab switch
   }
   if (view === 'logs') { fetchLogs(); _startLogsTimer(); } else { _stopLogsTimer(); }
   if (view === 'board') {
@@ -15949,6 +15946,16 @@ function connectSSE() {
       } else if (msg.type === 'alerts') {
         for (const a of (msg.payload || [])) {
           _fireAmuxAlert(a);
+        }
+      } else if (msg.type === 'invalidate') {
+        for (const key of (msg.keys || [])) {
+          if (key === 'notes') {
+            if (activeView === 'notes') _notesLoad();
+            else _notesDirty = true;
+          } else if (key === 'crm') {
+            if (activeView === 'crm') _crmLoad();
+            else _crmDirty = true;
+          }
         }
       }
     } catch(err) { console.error('SSE parse:', err); }
@@ -18226,6 +18233,8 @@ class CCHandler(BaseHTTPRequestHandler):
         heartbeat_counter = 0
         log_cursor = len(_event_log)  # start from current position
         alert_cursor = len(_sse_alerts)  # start from current position
+        last_notes_version = _notes_version
+        last_crm_version   = _crm_version
 
         try:
             while True:
@@ -18271,6 +18280,18 @@ class CCHandler(BaseHTTPRequestHandler):
                     alert_cursor = len(_sse_alerts)
                 if new_alerts:
                     self.wfile.write(f"data: {json.dumps({'type': 'alerts', 'payload': new_alerts})}\n\n".encode())
+                    self.wfile.flush()
+
+                # Invalidation signals for notes and CRM — lightweight, no payload
+                invalidated = []
+                if _notes_version != last_notes_version:
+                    last_notes_version = _notes_version
+                    invalidated.append("notes")
+                if _crm_version != last_crm_version:
+                    last_crm_version = _crm_version
+                    invalidated.append("crm")
+                if invalidated:
+                    self.wfile.write(f"data: {json.dumps({'type': 'invalidate', 'keys': invalidated})}\n\n".encode())
                     self.wfile.flush()
 
                 # Heartbeat every 15s (7-8 iterations at 2s sleep)
@@ -18537,12 +18558,15 @@ class CCHandler(BaseHTTPRequestHandler):
                     return self._json({"content": note_path.read_text(errors="replace"), "path": note_rel})
                 return self._json({"error": "not found"}, 404)
             if method == "POST":
+                global _notes_version
                 body = self._read_body()
                 content = body.get("content", "")
                 note_path.parent.mkdir(parents=True, exist_ok=True)
                 note_path.write_text(content)
+                _notes_version += 1
                 return self._json({"ok": True, "path": note_rel})
             if method == "DELETE":
+                global _notes_version
                 if note_path.exists():
                     trash_dir = CC_NOTES / ".trash"
                     trash_dir.mkdir(parents=True, exist_ok=True)
@@ -18554,6 +18578,7 @@ class CCHandler(BaseHTTPRequestHandler):
                             i += 1
                         dest = trash_dir / f"{stem}-{i}{ext}"
                     note_path.rename(dest)
+                _notes_version += 1
                 return self._json({"ok": True})
 
         # GET /api/skills — list skills from SQLite
@@ -20344,6 +20369,7 @@ p{{color:#888;margin:12px 0 28px;font-size:0.9rem;line-height:1.5}}
 
         # ── CRM / People ─────────────────────────────────────────────────────
         if path == "/api/crm/contacts" or path.startswith("/api/crm/"):
+            global _crm_version
             import secrets as _csec, datetime as _dt
             db = get_db()
             now = int(time.time())
@@ -20391,6 +20417,7 @@ p{{color:#888;margin:12px 0 28px;font-size:0.9rem;line-height:1.5}}
                         try: db.execute("INSERT INTO crm_tags (contact_id,tag) VALUES (?,?)", (cid, tag))
                         except Exception: pass
                 db.commit()
+                _crm_version += 1
                 return self._json({"id": cid, "ok": True}, 201)
 
             # GET/PATCH/DELETE /api/crm/contacts/:id
@@ -20419,10 +20446,12 @@ p{{color:#888;margin:12px 0 28px;font-size:0.9rem;line-height:1.5}}
                                 try: db.execute("INSERT INTO crm_tags (contact_id,tag) VALUES (?,?)", (cid, tag))
                                 except Exception: pass
                     db.commit()
+                    _crm_version += 1
                     return self._json({"ok": True})
                 if method == "DELETE":
                     db.execute("UPDATE crm_contacts SET deleted=? WHERE id=?", (now, cid))
                     db.commit()
+                    _crm_version += 1
                     return self._json({"ok": True})
 
             # POST /api/crm/contacts/:id/interactions
@@ -20439,6 +20468,7 @@ p{{color:#888;margin:12px 0 28px;font-size:0.9rem;line-height:1.5}}
                 )
                 db.execute("UPDATE crm_contacts SET updated=? WHERE id=?", (now, cid))
                 db.commit()
+                _crm_version += 1
                 return self._json({"id": ix_id, "ok": True}, 201)
 
             # PATCH/DELETE /api/crm/interactions/:id
@@ -20453,10 +20483,12 @@ p{{color:#888;margin:12px 0 28px;font-size:0.9rem;line-height:1.5}}
                         set_cl = ", ".join(f"{k}=?" for k in fields)
                         db.execute(f"UPDATE crm_interactions SET {set_cl}, updated=? WHERE id=?", [*fields.values(), now, ix_id])
                         db.commit()
+                    _crm_version += 1
                     return self._json({"ok": True})
                 if method == "DELETE":
                     db.execute("DELETE FROM crm_interactions WHERE id=?", (ix_id,))
                     db.commit()
+                    _crm_version += 1
                     return self._json({"ok": True})
 
             # GET /api/crm/followups
