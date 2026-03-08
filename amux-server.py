@@ -7582,6 +7582,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
           <div class="chip" onclick="peekQuickKeys('Enter')">Enter</div>
           <div class="chip" onclick="peekQuickKeys('Up')">&#x2191;</div>
           <div class="chip" onclick="peekQuickKeys('Down')">&#x2193;</div>
+          <div class="chip" id="peek-git-push-btn" onclick="peekGitPush()">Push</div>
           <div class="chip" onclick="peekQuickSend('/status')">/status</div>
           <div class="chip" onclick="peekQuickSend('/model')">/model</div>
           <div class="chip" onclick="peekQuickSend('/mcp')">/mcp</div>
@@ -7647,7 +7648,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <span id="peek-git-branch" style="font-family:monospace;font-size:0.88rem;font-weight:600;"></span>
         <span id="peek-git-worktree-badge" style="display:none;font-size:0.7rem;background:rgba(99,102,241,0.15);color:#818cf8;border-radius:4px;padding:2px 7px;">worktree</span>
         <span style="flex:1;"></span>
-        <button class="btn" id="peek-git-push-btn" onclick="peekGitPush()" style="font-size:0.75rem;padding:3px 9px;">Push</button>
         <button class="btn" id="peek-git-pr-btn" onclick="peekGitOpenPR()" style="font-size:0.75rem;padding:3px 9px;" title="Open pull request">PR ↗</button>
       </div>
       <!-- Two-panel body -->
@@ -10147,12 +10147,12 @@ function _buildPRUrl(remoteUrl, branch) {
 async function peekGitPush() {
   if (!peekSession) return;
   const btn = document.getElementById('peek-git-push-btn');
-  btn.disabled = true; btn.textContent = 'Pushing…';
+  btn.style.opacity = '0.5'; btn.style.pointerEvents = 'none'; btn.textContent = 'Pushing…';
   const branch = _peekGitData && _peekGitData.branch;
   const text = branch ? `git push -u origin ${branch}` : 'git push';
   await doSend(peekSession, text);
   setTimeout(() => loadPeekGit(), 3000);
-  btn.disabled = false;
+  btn.style.opacity = ''; btn.style.pointerEvents = '';
 }
 
 function peekGitOpenPR() {
