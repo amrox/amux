@@ -34,13 +34,17 @@ for _old_home in [Path.home() / ".cmux", Path.home() / ".cc"]:
         break
 
 # Load ~/.amux/server.env before reading any env vars (persistent server config)
+# server.env values OVERRIDE process env — user-saved settings (e.g. API keys
+# saved via the Settings UI) take priority over Docker-injected defaults.
 _server_env_file = _amux_home / "server.env"
 if _server_env_file.exists():
     for _line in _server_env_file.read_text().splitlines():
         _line = _line.strip()
         if _line and not _line.startswith("#") and "=" in _line:
             _k, _, _v = _line.partition("=")
-            os.environ.setdefault(_k.strip(), _v.strip())
+            _k, _v = _k.strip(), _v.strip()
+            if _v:  # only override if value is non-empty
+                os.environ[_k] = _v
 
 CC_HOME = Path(os.environ.get("CC_HOME", _amux_home))
 CC_SESSIONS = CC_HOME / "sessions"
@@ -14516,9 +14520,6 @@ function _mapLoad() {
     _mapRenderTags();
     _mapRenderPins();
     _mapRenderMarkers();
-    if (_map) {
-      _map.setView([_mapSettings.defaultLat, _mapSettings.defaultLng], _mapSettings.defaultZoom);
-    }
   }).catch(function() {
     // offline fallback
     try { _mapPins = JSON.parse(localStorage.getItem('amux_map_pins') || '[]'); } catch(e) { _mapPins = []; }
@@ -14934,7 +14935,7 @@ function _mapGeoRenderResults(data) {
         '<div class="map-geocoder-result-addr">' + escHtml(r.display_name) + '</div>' +
         '<a class="map-geocoder-gmaps-link" href="' + mapsUrl + '" target="_blank" rel="noopener" onclick="event.stopPropagation()">View on Google Maps ↗</a>' +
       '</div>' +
-      '<button class="map-geocoder-result-save" onclick="event.stopPropagation();_mapGeoSavePin(' + i + ')">+ Pin</button>' +
+      '<button class="map-geocoder-result-save" onclick="event.stopPropagation();_mapGeoQuickSave(' + i + ')">+ Pin</button>' +
     '</div>';
   }).join('') + (isGoogle ? '<div class="map-geocoder-attribution">Powered by Google</div>' : '');
   results.style.display = 'block';
@@ -22019,6 +22020,20 @@ class CCHandler(BaseHTTPRequestHandler):
                 _server_env_file.write_text("\n".join(lines) + "\n")
                 if "ANTHROPIC_API_KEY" in updates:
                     _init_claude_config()
+                    # Push updated key into all running tmux sessions
+                    _new_key = updates["ANTHROPIC_API_KEY"]
+                    try:
+                        _sessions = subprocess.run(
+                            ["tmux", "list-sessions", "-F", "#{session_name}"],
+                            capture_output=True, text=True)
+                        if _sessions.returncode == 0:
+                            for _sn in _sessions.stdout.strip().splitlines():
+                                subprocess.run(
+                                    ["tmux", "set-environment", "-t", _sn,
+                                     "ANTHROPIC_API_KEY", _new_key],
+                                    capture_output=True)
+                    except Exception:
+                        pass
                 return self._json({"ok": True})
 
         # ── Org / Team / Invites ──────────────────────────────────────────────
