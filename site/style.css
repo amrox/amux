@@ -1,23 +1,25 @@
 /* amux — shared subpage stylesheet
- * Font: JetBrains Mono (Google Fonts)
- * Theme: dark-only, minimal, WCAG AA compliant
+ * Fonts: Geist (sans) + JetBrains Mono (code)
+ * Theme: light, minimal, WCAG AA compliant
  * ─────────────────────────────────────────────────────── */
 
 :root {
-  --bg:           #0a0a0c;
-  --surface:      #111114;
-  --surface-2:    #18181c;
-  --border:       #2a2a30;
-  --border-dim:   #1e1e24;
-  --text:         #e8e8ec;
-  --dim:          #8888a0;
-  --muted:        #7e7e95;   /* 4.9:1 on --bg — WCAG AA */
-  --green:        #4ade80;
-  --green-dim:    #22c55e;
-  --green-glow:   rgba(74,222,128,0.12);
-  --amber:        #fbbf24;
-  --red:          #f87171;
-  --blue:         #60a5fa;
+  --bg:           #ffffff;
+  --surface:      #f7f7f8;
+  --surface-2:    #efefef;
+  --border:       #e2e2e5;
+  --border-dim:   #ececef;
+  --text:         #0a0a0a;
+  --dim:          #6b6b6b;
+  --muted:        #9a9a9a;
+  --accent:       #0a0a0a;
+  --green:        #16a34a;
+  --green-dim:    #15803d;
+  --green-glow:   rgba(22,163,74,0.08);
+  --amber:        #d97706;
+  --red:          #dc2626;
+  --blue:         #2563eb;
+  --sans:         'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --mono:         'JetBrains Mono', 'SF Mono', Consolas, monospace;
 }
 
@@ -31,13 +33,13 @@ html {
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: var(--mono);
-  font-size: 0.875rem;
-  line-height: 1.75;
+  font-family: var(--sans);
+  font-size: 0.95rem;
+  line-height: 1.7;
   -webkit-font-smoothing: antialiased;
 }
 
-::selection { background: var(--green); color: var(--bg); }
+::selection { background: var(--accent); color: #fff; }
 
 /* ── NAV ── */
 .site-header {
@@ -49,13 +51,13 @@ body {
   justify-content: space-between;
   padding: 0 2rem;
   height: 56px;
-  background: rgba(10,10,12,0.92);
+  background: rgba(255,255,255,0.92);
   backdrop-filter: blur(20px);
   border-bottom: 1px solid var(--border);
 }
 
 .site-header a.logo {
-  font-size: 0.92rem;
+  font-size: 0.95rem;
   font-weight: 700;
   color: var(--text);
   text-decoration: none;
@@ -69,25 +71,24 @@ body {
 }
 
 .site-header nav a {
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   color: var(--dim);
   text-decoration: none;
-  letter-spacing: 0.04em;
   transition: color 0.15s;
 }
 
 .site-header nav a:hover { color: var(--text); }
 
 .site-header nav a.nav-cta {
-  background: var(--text);
-  color: var(--bg);
-  padding: 0.32rem 0.85rem;
-  border-radius: 4px;
-  font-weight: 700;
+  background: var(--accent);
+  color: #fff;
+  padding: 0.4rem 1rem;
+  border-radius: 6px;
+  font-weight: 600;
   transition: opacity 0.15s;
 }
 
-.site-header nav a.nav-cta:hover { opacity: 0.85; color: var(--bg); }
+.site-header nav a.nav-cta:hover { opacity: 0.8; color: #fff; }
 
 @media (max-width: 640px) {
   .site-header { padding: 0 1rem; }
@@ -104,7 +105,7 @@ main {
 
 /* ── BREADCRUMB ── */
 .breadcrumb {
-  font-size: 0.72rem;
+  font-size: 0.8rem;
   color: var(--muted);
   margin-bottom: 1.5rem;
   display: flex;
@@ -119,7 +120,7 @@ main {
 
 /* ── TYPOGRAPHY ── */
 h1 {
-  font-size: clamp(1.4rem, 4vw, 2rem);
+  font-size: clamp(1.5rem, 4vw, 2.2rem);
   font-weight: 700;
   letter-spacing: -0.03em;
   line-height: 1.2;
@@ -128,24 +129,24 @@ h1 {
 }
 
 .subtitle {
-  font-size: 0.9rem;
+  font-size: 1rem;
   color: var(--dim);
   margin-bottom: 2rem;
   line-height: 1.65;
 }
 
 h2 {
-  font-size: 1.1rem;
+  font-size: 1.2rem;
   font-weight: 700;
   letter-spacing: -0.02em;
   margin: 2.5rem 0 0.75rem;
   color: var(--text);
   padding-top: 0.5rem;
-  border-top: 1px solid var(--border-dim);
+  border-top: 1px solid var(--border);
 }
 
 h3 {
-  font-size: 0.92rem;
+  font-size: 1rem;
   font-weight: 600;
   margin: 1.75rem 0 0.5rem;
   color: var(--text);
@@ -154,8 +155,8 @@ h3 {
 p { margin-bottom: 1rem; color: var(--dim); }
 p strong, li strong { color: var(--text); font-weight: 600; }
 
-a { color: var(--green); text-decoration: none; }
-a:hover { text-decoration: underline; }
+a { color: var(--text); text-decoration: underline; }
+a:hover { color: var(--accent); }
 
 ul, ol {
   margin: 0.5rem 0 1.1rem 1.4rem;
@@ -169,23 +170,23 @@ li {
 /* ── CODE ── */
 code {
   font-family: var(--mono);
-  font-size: 0.82em;
-  background: rgba(74,222,128,0.07);
-  color: var(--green);
-  padding: 0.12em 0.45em;
-  border-radius: 3px;
-  border: 1px solid rgba(74,222,128,0.15);
+  font-size: 0.85em;
+  background: var(--surface);
+  color: var(--text);
+  padding: 0.15em 0.5em;
+  border-radius: 4px;
+  border: 1px solid var(--border);
 }
 
 pre {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 10px;
   padding: 1.1rem 1.3rem;
   overflow-x: auto;
   margin: 1.25rem 0;
   font-family: var(--mono);
-  font-size: 0.78rem;
+  font-size: 0.82rem;
   line-height: 1.85;
 }
 
@@ -193,7 +194,7 @@ pre code {
   background: none;
   border: none;
   padding: 0;
-  color: var(--text);
+  color: #e2e2e2;
   font-size: 1em;
 }
 
@@ -202,27 +203,27 @@ table {
   width: 100%;
   border-collapse: collapse;
   margin: 1.25rem 0;
-  font-size: 0.8rem;
+  font-size: 0.88rem;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 8px;
   overflow: hidden;
 }
 
 th {
   text-align: left;
   font-weight: 600;
-  font-size: 0.65rem;
-  letter-spacing: 0.07em;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   padding: 0.65rem 0.9rem;
-  background: var(--surface-2);
+  background: var(--surface);
   color: var(--muted);
   border-bottom: 1px solid var(--border);
 }
 
 td {
-  padding: 0.55rem 0.9rem;
-  border-bottom: 1px solid var(--border-dim);
+  padding: 0.6rem 0.9rem;
+  border-bottom: 1px solid var(--border);
   color: var(--dim);
   vertical-align: top;
 }
@@ -235,35 +236,35 @@ tr:hover td { background: var(--surface); }
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.42rem 1rem;
-  border-radius: 6px;
-  font-size: 0.78rem;
+  padding: 0.5rem 1.1rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
   font-weight: 500;
-  font-family: var(--mono);
+  font-family: var(--sans);
   text-decoration: none;
   border: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--bg);
   color: var(--text);
   cursor: pointer;
   transition: background 0.12s, border-color 0.12s;
 }
 
-.btn:hover { background: var(--surface-2); border-color: var(--border-dim); text-decoration: none; }
+.btn:hover { background: var(--surface); border-color: var(--border-dim); text-decoration: none; }
 
 .btn-primary {
-  background: var(--text);
-  border-color: var(--text);
-  color: var(--bg);
-  font-weight: 700;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
 }
 
-.btn-primary:hover { opacity: 0.85; background: var(--text); color: var(--bg); }
+.btn-primary:hover { opacity: 0.85; background: var(--accent); color: #fff; }
 
 /* ── CTA BOX ── */
 .cta-box {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 1.5rem;
   margin: 2rem 0;
 }
@@ -273,15 +274,15 @@ tr:hover td { background: var(--surface); }
 /* ── TAG ── */
 .tag {
   display: inline-block;
-  font-size: 0.65rem;
+  font-size: 0.7rem;
   font-weight: 500;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
   padding: 0.15rem 0.5rem;
-  border-radius: 3px;
-  background: var(--surface-2);
+  border-radius: 4px;
+  background: var(--surface);
   border: 1px solid var(--border);
-  color: var(--muted);
+  color: var(--dim);
   margin-right: 0.3rem;
 }
 
@@ -308,21 +309,21 @@ footer {
 }
 
 .footer-brand-col p {
-  font-size: 0.72rem; color: var(--muted); line-height: 1.6; margin-top: 0.4rem;
+  font-size: 0.82rem; color: var(--dim); line-height: 1.6; margin-top: 0.4rem;
 }
 
 .footer-col-label {
-  font-size: 0.58rem; font-weight: 600; letter-spacing: 0.1em;
-  text-transform: uppercase; color: var(--dim); margin-bottom: 0.5rem;
+  font-size: 0.65rem; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem;
 }
 
 .footer-col ul {
-  list-style: none; display: flex; flex-direction: column; gap: 0.3rem;
+  list-style: none; display: flex; flex-direction: column; gap: 0.35rem;
   margin: 0; padding: 0;
 }
 
 .footer-col ul a {
-  font-size: 0.72rem; color: var(--muted); text-decoration: none; transition: color 0.15s;
+  font-size: 0.82rem; color: var(--dim); text-decoration: none; transition: color 0.15s;
 }
 .footer-col ul a:hover { color: var(--text); }
 
@@ -330,16 +331,16 @@ footer {
   border-top: 1px solid var(--border); padding-top: 1rem;
   display: flex; justify-content: space-between; align-items: center;
   flex-wrap: wrap; gap: 0.5rem;
-  font-size: 0.62rem; color: var(--muted);
+  font-size: 0.72rem; color: var(--muted);
 }
 
-.footer-bottom a { color: var(--muted); text-decoration: none; }
+.footer-bottom a { color: var(--dim); text-decoration: none; }
 .footer-bottom a:hover { color: var(--text); }
 .footer-bottom-links { display: flex; gap: 1rem; }
 
 @media (max-width: 600px) {
   main { padding: 1.75rem 1rem 4rem; }
-  h1 { font-size: 1.3rem; }
+  h1 { font-size: 1.4rem; }
 }
 
 /* ── DEMOS PAGE ── */
@@ -350,7 +351,7 @@ footer {
 }
 
 .wrap h1 {
-  font-size: 1.8rem;
+  font-size: 2rem;
   font-weight: 700;
   margin: 0 0 0.4rem;
   color: var(--text);
@@ -359,7 +360,7 @@ footer {
 .wrap .subtitle {
   color: var(--dim);
   margin: 0 0 1.5rem;
-  font-size: 0.85rem;
+  font-size: 0.95rem;
 }
 
 .filters {
@@ -370,26 +371,26 @@ footer {
 }
 
 .filter-btn {
-  background: var(--surface);
+  background: var(--bg);
   border: 1px solid var(--border);
-  color: var(--muted);
-  padding: 0.3rem 0.8rem;
-  border-radius: 4px;
-  font-family: inherit;
-  font-size: 0.75rem;
+  color: var(--dim);
+  padding: 0.35rem 0.9rem;
+  border-radius: 6px;
+  font-family: var(--sans);
+  font-size: 0.82rem;
   cursor: pointer;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
 .filter-btn:hover {
-  background: var(--surface-2);
+  background: var(--surface);
   color: var(--text);
 }
 
 .filter-btn.active {
-  background: var(--surface-2);
-  border-color: var(--dim);
-  color: var(--text);
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 
 .grid {
@@ -399,16 +400,16 @@ footer {
 }
 
 .demo-card {
-  background: var(--surface);
+  background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 10px;
   overflow: hidden;
-  transition: border-color 0.15s, transform 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 
 .demo-card:hover {
-  border-color: var(--dim);
-  transform: translateY(-2px);
+  border-color: var(--border-dim);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.06);
 }
 
 .demo-card a {
@@ -421,7 +422,7 @@ footer {
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
-  background: #0a0a0c;
+  background: var(--surface);
   overflow: hidden;
 }
 
@@ -439,17 +440,17 @@ footer {
 
 .demo-tag {
   display: inline-block;
-  font-size: 0.65rem;
+  font-size: 0.7rem;
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--dim);
+  color: var(--muted);
   margin-bottom: 0.3rem;
 }
 
 .demo-info h3 {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: 0.92rem;
   font-weight: 600;
   color: var(--text);
   border: none;
