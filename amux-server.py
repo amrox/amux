@@ -6753,8 +6753,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .map-modal-actions { display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; align-items: center; }
   .map-btn-danger { background: var(--red) !important; color: #fff !important; border-color: transparent !important; }
   .map-btn-danger:hover { opacity: 0.85; }
-  /* Geocoder search */
-  .map-geocoder-wrap { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 1003; width: min(420px, calc(100% - 32px)); }
+  /* Geocoder search — lives inside sidebar, absolutely positioned over map on desktop */
+  .map-geocoder-wrap { position: absolute; top: 12px; left: calc(50% + 130px); transform: translateX(-50%); z-index: 1003; width: min(420px, calc(100% - 292px)); }
+  #map-view.sidebar-collapsed .map-geocoder-wrap { left: 50%; width: min(420px, calc(100% - 32px)); }
+  .map-sidebar { overflow: visible; }
   .map-geocoder-input-row { display: flex; background: var(--card); border: 1px solid var(--border); border-radius: 24px; box-shadow: 0 2px 12px rgba(0,0,0,0.4); overflow: hidden; }
   .map-geocoder-input { flex: 1; padding: 9px 16px; background: transparent; border: none; color: var(--text); font-size: 0.88rem; outline: none; font-family: inherit; min-width: 0; }
   .map-geocoder-input::placeholder { color: var(--dim); }
@@ -6773,10 +6775,15 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .map-geocoder-loading { padding: 10px 14px; font-size: 0.82rem; color: var(--dim); text-align: center; }
   @media (max-width: 600px) {
     #map-view { height: calc(100dvh - 122px); }
-    .map-sidebar { position: absolute; top: 0; left: 0; bottom: 0; z-index: 1000; width: 82vw !important; min-width: 0 !important; box-shadow: 4px 0 24px rgba(0,0,0,0.6); }
-    .map-sidebar.hidden { transform: translateX(-105%); }
-    .map-open-btn { display: block; }
+    .map-sidebar { position: absolute; top: 0; left: 0; bottom: 0; z-index: 1005; width: 85vw !important; min-width: 0 !important; box-shadow: 4px 0 24px rgba(0,0,0,0.6); overflow: hidden; }
+    .map-sidebar.hidden { transform: translateX(-110%); }
+    .map-open-btn { display: flex; }
     .map-toolbar { gap: 4px; padding: 5px 8px; }
+    /* On mobile: geocoder flows inside sidebar, not floating */
+    .map-geocoder-wrap { position: relative !important; top: auto !important; left: auto !important; transform: none !important; width: 100% !important; padding: 8px 10px; box-sizing: border-box; z-index: auto; }
+    .map-geocoder-wrap .map-geocoder-input-row { box-shadow: none; border-radius: 8px; }
+    .map-geocoder-results { position: fixed; left: 0; right: 0; z-index: 2000; max-height: 50vh; overflow-y: auto; border-radius: 0 0 12px 12px; margin-top: 0; }
+    #map-view.sidebar-collapsed .map-geocoder-wrap { display: none; }
   }
 
 </style>
@@ -7324,6 +7331,13 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <button class="notes-toggle-btn" onclick="_mapToggleSidebar()" title="Collapse sidebar"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/></svg></button>
       </div>
     </div>
+    <div class="map-geocoder-wrap" id="map-geocoder-wrap">
+      <div class="map-geocoder-input-row">
+        <input class="map-geocoder-input" id="map-geocoder-input" placeholder="&#x1F50D; Search places, addresses&#x2026;" autocomplete="off" oninput="_mapGeoSearch(this.value)" onkeydown="_mapGeoKeydown(event)">
+        <button class="map-geocoder-clear" id="map-geocoder-clear" onclick="_mapGeoClear()" title="Clear">&#x2715;</button>
+      </div>
+      <div class="map-geocoder-results" id="map-geocoder-results"></div>
+    </div>
     <div class="map-sidebar-section">
       <div class="map-section-hdr">
         <span>Tags</span>
@@ -7338,13 +7352,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   </div>
   <button class="map-open-btn" id="map-open-btn" onclick="_mapToggleSidebar()" title="Open sidebar"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m14 9 3 3-3 3"/></svg></button>
   <div class="map-main">
-    <div class="map-geocoder-wrap" id="map-geocoder-wrap">
-      <div class="map-geocoder-input-row">
-        <input class="map-geocoder-input" id="map-geocoder-input" placeholder="&#x1F50D; Search places, addresses&#x2026;" autocomplete="off" oninput="_mapGeoSearch(this.value)" onkeydown="_mapGeoKeydown(event)">
-        <button class="map-geocoder-clear" id="map-geocoder-clear" onclick="_mapGeoClear()" title="Clear">&#x2715;</button>
-      </div>
-      <div class="map-geocoder-results" id="map-geocoder-results"></div>
-    </div>
     <div id="map-container"></div>
     <div class="map-drop-hint" id="map-drop-hint">&#x1F4CD; Click anywhere on the map to place a pin &mdash; Esc to cancel</div>
     <div class="map-toolbar">
@@ -21321,31 +21328,7 @@ p{{color:#888;margin:12px 0 28px;font-size:0.9rem;line-height:1.5}}
             if action == "tracked-files":
                 meta = _load_meta(name)
                 tracked = meta.get("tracked_files", [])
-                if method == "GET":
-                    return self._json({"files": tracked})
-                if method == "POST":
-                    body = self._read_body()
-                    files = body.get("files", [])
-                    if isinstance(files, str):
-                        files = [files]
-                    existing = set(tracked)
-                    for fp in files:
-                        if fp and fp not in existing:
-                            tracked.append(fp)
-                            existing.add(fp)
-                    meta["tracked_files"] = tracked
-                    _save_meta(name, meta)
-                    return self._json({"ok": True, "files": tracked})
-                if method == "DELETE":
-                    body = self._read_body()
-                    files = body.get("files", [])
-                    if isinstance(files, str):
-                        files = [files]
-                    remove_set = set(files)
-                    tracked = [f for f in tracked if f not in remove_set]
-                    meta["tracked_files"] = tracked
-                    _save_meta(name, meta)
-                    return self._json({"ok": True, "files": tracked})
+                return self._json({"files": tracked})
             if action == "stats":
                 cfg = parse_env_file(env_file)
                 stats = get_claude_stats(cfg.get("CC_DIR", ""))
@@ -21376,6 +21359,26 @@ p{{color:#888;margin:12px 0 28px;font-size:0.9rem;line-height:1.5}}
                 content = mem_file.read_text(errors="replace") if mem_file.exists() else ""
                 return self._json({"content": content, "path": str(mem_file)})
             return self._json({"error": "not found"}, 404)
+
+        if action == "tracked-files" and method in ("POST", "DELETE"):
+            meta = _load_meta(name)
+            tracked = meta.get("tracked_files", [])
+            body = self._read_body()
+            files = body.get("files", [])
+            if isinstance(files, str):
+                files = [files]
+            if method == "POST":
+                existing = set(tracked)
+                for fp in files:
+                    if fp and fp not in existing:
+                        tracked.append(fp)
+                        existing.add(fp)
+            else:  # DELETE
+                remove_set = set(files)
+                tracked = [f for f in tracked if f not in remove_set]
+            meta["tracked_files"] = tracked
+            _save_meta(name, meta)
+            return self._json({"ok": True, "files": tracked})
 
         if method == "POST":
             if action == "send":
