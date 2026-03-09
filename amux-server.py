@@ -10490,6 +10490,7 @@ function openPeek(name, opts) {
   _syncPeekOverlayToVisualViewport();
   // Load cached peek instantly while fetching fresh data
   _idb.get('peek_' + name).then(cached => {
+    if (peekSession !== name) return;  // session changed before cache resolved
     if (cached && (!lastPeekHTML || lastPeekHTML.includes('Loading...'))) {
       lastPeekHTML = linkifyOutput(stripAnsi(cached.output));
       applyPeekSearch();
@@ -10679,7 +10680,8 @@ function linkifyOutput(text) {
 
 let peekSelecting = false;
 async function refreshPeek() {
-  if (!peekSession) return;
+  const name = peekSession;
+  if (!name) return;
   // Skip refresh while user is selecting text
   if (peekSelecting) return;
   const sel = window.getSelection();
@@ -10687,8 +10689,10 @@ async function refreshPeek() {
   const body = document.getElementById('peek-body');
   const statusEl = document.getElementById('peek-status');
   try {
-    const r = await fetch(API + '/api/sessions/' + peekSession + '/peek?lines=500');
+    const r = await fetch(API + '/api/sessions/' + name + '/peek?lines=500');
     const data = await r.json();
+    // Session changed while fetch was in flight — discard stale response
+    if (peekSession !== name) return;
     const output = data.output || '(no output)';
     const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
     const newHTML = linkifyOutput(stripAnsi(output));
