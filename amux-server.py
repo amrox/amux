@@ -8503,6 +8503,11 @@ let _gatewayOrgs = [];
 async function _initIdentity() {
   try {
     const r = await fetch('/api/identity');
+    if (r.status === 401 && location.hostname !== 'localhost' && !location.hostname.startsWith('127.')) {
+      // Cloud: session expired or not logged in — redirect to login
+      window.location.replace('/api/cloud-logout');
+      return;
+    }
     if (!r.ok) return;
     const d = await r.json();
     _cloudEmail = d.email || '';
