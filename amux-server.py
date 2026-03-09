@@ -9797,13 +9797,24 @@ function toggleArchived() {
 function _renderArchivedSection() {
   const el = document.getElementById('archived-section');
   if (!el) return;
-  const archived = sessions.filter(s => s.archived);
-  if (!archived.length) { el.innerHTML = ''; return; }
-  const chevron = `<span class="archived-chevron${archivedExpanded ? ' open' : ''}">&#x25B6;</span>`;
-  let html = `<div class="archived-footer" onclick="toggleArchived()">${chevron} ${archived.length} archived</div>`;
-  if (archivedExpanded) {
+  const allArchived = sessions.filter(s => s.archived);
+  if (!allArchived.length) { el.innerHTML = ''; return; }
+  const q = searchQuery.toLowerCase().trim();
+  const archived = q ? allArchived.filter(s =>
+    s.name.toLowerCase().includes(q) ||
+    (s.dir || '').toLowerCase().includes(q) ||
+    (s.desc || '').toLowerCase().includes(q) ||
+    (s.tags || []).some(t => t.toLowerCase().includes(q))
+  ) : allArchived;
+  const showExpanded = archivedExpanded || (q && archived.length > 0);
+  const label = q && archived.length !== allArchived.length
+    ? `${archived.length} of ${allArchived.length} archived`
+    : `${allArchived.length} archived`;
+  const chevron = `<span class="archived-chevron${showExpanded ? ' open' : ''}">&#x25B6;</span>`;
+  let html = `<div class="archived-footer" onclick="toggleArchived()">${chevron} ${label}</div>`;
+  if (showExpanded) {
     html += '<div class="archived-body">';
-    archived.forEach(s => {
+    (q ? archived : allArchived).forEach(s => {
       const ago = s.last_activity ? timeAgo(s.last_activity) : '';
       const preview = esc(s.preview || s.desc || '');
       html += `<div class="archived-card">
