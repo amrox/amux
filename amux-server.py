@@ -50,6 +50,7 @@ CC_BOARD_DIR = CC_HOME / "board"
 CC_UPLOADS = CC_HOME / "uploads"
 CC_NOTES = CC_HOME / "notes"
 CC_NOTES_PINS = CC_HOME / "notes" / ".pins.json"
+CC_MAP = CC_HOME / "map.json"
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 CC_LOGS.mkdir(parents=True, exist_ok=True)
 CC_MEMORY.mkdir(parents=True, exist_ok=True)
@@ -3080,6 +3081,7 @@ def list_sessions() -> list:
             "task_name": _doing_tasks.get(name) or pane_title,
             "tokens": tokens,
             "branch": cfg.get("CC_BRANCH", ""),
+            "mcp": cfg.get("CC_MCP", ""),
         })
     status_order = {"active": 0, "waiting": 0, "idle": 1, "": 1}
     sessions.sort(key=lambda s: (not s["pinned"], not s["running"], status_order.get(s["status"], 1), -s["last_activity"]))
@@ -3735,6 +3737,17 @@ def start_session(name: str, extra_flags: str = "", _skip_conv_id: bool = False)
         cmd += f" {session_flag}"
     if extra_flags:
         cmd += f" {extra_flags}"
+    # Inject --mcp-config based on CC_MCP setting (chrome, playwright, both, or empty)
+    mcp_val = cfg.get("CC_MCP", "").strip().lower()
+    mcp_dir = CC_HOME  # ~/.amux
+    if mcp_val in ("chrome", "both"):
+        mcp_chrome = mcp_dir / "mcp-chrome.json"
+        if mcp_chrome.exists():
+            cmd += f" --mcp-config {shlex.quote(str(mcp_chrome))}"
+    if mcp_val in ("playwright", "both"):
+        mcp_pw = mcp_dir / "mcp-playwright.json"
+        if mcp_pw.exists():
+            cmd += f" --mcp-config {shlex.quote(str(mcp_pw))}"
     # Default to sonnet if no --model specified anywhere
     if "--model" not in cmd:
         cmd += " --model sonnet"
@@ -7760,6 +7773,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <span id="peek-git-worktree-badge" style="display:none;font-size:0.7rem;background:rgba(99,102,241,0.15);color:#818cf8;border-radius:4px;padding:2px 7px;">worktree</span>
         <span style="flex:1;"></span>
         <button class="btn" id="peek-git-filter-btn" onclick="toggleGitFilter()" style="font-size:0.72rem;padding:3px 9px;display:none;" title="Toggle between session files and all changes">Session</button>
+        <button class="btn" id="peek-git-push-btn" onclick="peekGitPush()" style="font-size:0.75rem;padding:3px 9px;" title="Push branch">Push</button>
         <button class="btn" id="peek-git-pr-btn" onclick="peekGitOpenPR()" style="font-size:0.75rem;padding:3px 9px;" title="Open pull request">PR ↗</button>
       </div>
       <!-- Two-panel body -->
@@ -14002,15 +14016,38 @@ let _mapEditingPin = null;
 let _mapEditingTag = null;
 
 function _mapLoad() {
-  try { _mapPins = JSON.parse(localStorage.getItem('amux_map_pins') || '[]'); } catch(e) { _mapPins = []; }
-  try { _mapTags = JSON.parse(localStorage.getItem('amux_map_tags') || '[]'); } catch(e) { _mapTags = []; }
-  try { const s = localStorage.getItem('amux_map_settings'); if (s) _mapSettings = {..._mapSettings, ...JSON.parse(s)}; } catch(e) {}
+  // Load from server; fall back to localStorage for offline resilience
+  fetch(API + '/api/map').then(function(r) { return r.ok ? r.json() : null; }).then(function(data) {
+    if (!data) return;
+    _mapPins = data.pins || [];
+    _mapTags = data.tags || [];
+    _mapSettings = Object.assign(_mapSettings, data.settings || {});
+    _mapRenderTags();
+    _mapRenderPins();
+    _mapRenderMarkers();
+    if (_map) {
+      _map.setView([_mapSettings.defaultLat, _mapSettings.defaultLng], _mapSettings.defaultZoom);
+    }
+  }).catch(function() {
+    // offline fallback
+    try { _mapPins = JSON.parse(localStorage.getItem('amux_map_pins') || '[]'); } catch(e) { _mapPins = []; }
+    try { _mapTags = JSON.parse(localStorage.getItem('amux_map_tags') || '[]'); } catch(e) { _mapTags = []; }
+    try { var s = localStorage.getItem('amux_map_settings'); if (s) _mapSettings = Object.assign(_mapSettings, JSON.parse(s)); } catch(e) {}
+  });
 }
 
 function _mapSave() {
-  localStorage.setItem('amux_map_pins', JSON.stringify(_mapPins));
-  localStorage.setItem('amux_map_tags', JSON.stringify(_mapTags));
-  localStorage.setItem('amux_map_settings', JSON.stringify(_mapSettings));
+  var payload = { pins: _mapPins, tags: _mapTags, settings: _mapSettings };
+  fetch(API + '/api/map', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }).catch(function() {
+    // offline fallback
+    localStorage.setItem('amux_map_pins', JSON.stringify(_mapPins));
+    localStorage.setItem('amux_map_tags', JSON.stringify(_mapTags));
+    localStorage.setItem('amux_map_settings', JSON.stringify(_mapSettings));
+  });
 }
 
 function _mapInit() {
@@ -19167,6 +19204,19 @@ class CCHandler(BaseHTTPRequestHandler):
                             _write_claude_memory(sname, wd)
                 return self._json({"ok": True})
 
+        # Map API (/api/map)
+        if path == "/api/map":
+            if method == "GET":
+                data = {"pins": [], "tags": [], "settings": {}}
+                if CC_MAP.exists():
+                    try: data = json.loads(CC_MAP.read_text())
+                    except Exception: pass
+                return self._json(data)
+            if method == "POST":
+                body = json.loads(self._read_body())
+                CC_MAP.write_text(json.dumps(body))
+                return self._json({"ok": True})
+
         # Notes API (/api/notes)
         if method == "POST" and path.startswith("/api/notes/") and path.endswith("/pin"):
             note_rel = path[len("/api/notes/"):-len("/pin")]
@@ -20743,6 +20793,9 @@ class CCHandler(BaseHTTPRequestHandler):
             if creator:
                 cfg["CC_CREATOR"] = creator
             cfg["CC_FLAGS"] = ""
+            mcp = body.get("mcp", "").strip().lower()
+            if mcp and mcp in ("chrome", "playwright", "both"):
+                cfg["CC_MCP"] = mcp
             _write_env(env_file, cfg)
             _save_meta(name, {
                 "created_at": int(time.time()),
@@ -21696,6 +21749,16 @@ p{{color:#888;margin:12px 0 28px;font-size:0.9rem;line-height:1.5}}
                     cfg["CC_TAGS"] = body["tags"].strip()
                     _write_env(env_file, cfg)
                     return self._json({"ok": True, "message": "tags updated"})
+
+                # Set MCP browser config (chrome, playwright, both, or empty to disable)
+                if "mcp" in body:
+                    mcp_val = body["mcp"].strip().lower()
+                    if mcp_val and mcp_val not in ("chrome", "playwright", "both"):
+                        return self._json({"error": "mcp must be 'chrome', 'playwright', 'both', or '' (empty)"}, 400)
+                    cfg["CC_MCP"] = mcp_val
+                    _write_env(env_file, cfg)
+                    msg = f"mcp set to {mcp_val}" if mcp_val else "mcp disabled"
+                    return self._json({"ok": True, "message": f"{msg} (restart session to apply)"})
 
                 # Clear conversation history (next start gets a fresh session)
                 if body.get("new_conversation"):
