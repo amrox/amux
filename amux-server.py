@@ -2966,8 +2966,10 @@ def _build_system_metrics() -> dict:
             for line in tp.stdout.splitlines():
                 parts = line.split()
                 if len(parts) == 2 and parts[1].isdigit():
-                    # Only keep first pane per session (shell pid)
-                    shell_pids.setdefault(parts[0], int(parts[1]))
+                    # tmux sessions are named "amux-<session>"; strip prefix
+                    tmux_name = parts[0]
+                    sess_name = tmux_name[len("amux-"):] if tmux_name.startswith("amux-") else tmux_name
+                    shell_pids.setdefault(sess_name, int(parts[1]))
     except Exception:
         pass
 
