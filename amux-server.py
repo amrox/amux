@@ -2830,6 +2830,186 @@ def get_daily_token_stats() -> dict:
     }
 
 
+def get_system_metrics() -> dict:
+    """Get system resource metrics and per-session process attribution."""
+    result: dict = {"system": {}, "sessions": []}
+
+    # ── System-level metrics ──────────────────────────────────────────────────
+    try:
+        import psutil as _psutil  # type: ignore
+        cpu_pct = _psutil.cpu_percent(interval=0.25)
+        cpu_per = _psutil.cpu_percent(percpu=True)
+        mem = _psutil.virtual_memory()
+        swap = _psutil.swap_memory()
+        disk = _psutil.disk_usage("/")
+        try:
+            load: list = [round(x, 2) for x in os.getloadavg()]
+        except AttributeError:
+            load = []
+        result["system"] = {
+            "cpu_percent": cpu_pct,
+            "cpu_count": _psutil.cpu_count(logical=True),
+            "cpu_per_core": [round(x, 1) for x in cpu_per],
+            "ram_used_mb": round(mem.used / 1_048_576, 1),
+            "ram_total_mb": round(mem.total / 1_048_576, 1),
+            "ram_percent": round(mem.percent, 1),
+            "swap_used_mb": round(swap.used / 1_048_576, 1),
+            "swap_total_mb": round(swap.total / 1_048_576, 1),
+            "disk_used_gb": round(disk.used / 1_073_741_824, 1),
+            "disk_total_gb": round(disk.total / 1_073_741_824, 1),
+            "disk_percent": round(disk.percent, 1),
+            "load_avg": load,
+            "uptime_seconds": int(time.time() - _psutil.boot_time()),
+            "hostname": socket.gethostname(),
+            "psutil": True,
+        }
+    except Exception:
+        # Graceful fallback — subprocess-based (macOS/Linux)
+        sys_info: dict = {"hostname": socket.gethostname(), "psutil": False}
+        try:
+            sys_info["load_avg"] = [round(x, 2) for x in os.getloadavg()]
+        except AttributeError:
+            sys_info["load_avg"] = []
+        try:
+            vm = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=3)
+            sc = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=3)
+            if vm.returncode == 0 and sc.returncode == 0:
+                total_bytes = int(sc.stdout.strip())
+                page_size = 16384
+                stats: dict = {}
+                for line in vm.stdout.splitlines():
+                    m = re.match(r"^Pages (.+):\s+(\d+)", line)
+                    if m:
+                        stats[m.group(1)] = int(m.group(2)) * page_size
+                free = stats.get("free", 0) + stats.get("speculative", 0)
+                used = total_bytes - free
+                sys_info.update({
+                    "ram_total_mb": round(total_bytes / 1_048_576, 1),
+                    "ram_used_mb": round(used / 1_048_576, 1),
+                    "ram_percent": round(used / total_bytes * 100, 1) if total_bytes else 0,
+                })
+        except Exception:
+            pass
+        try:
+            df = subprocess.run(["df", "-k", "/"], capture_output=True, text=True, timeout=3)
+            if df.returncode == 0:
+                parts = df.stdout.splitlines()[-1].split()
+                if len(parts) >= 3:
+                    tk, uk = int(parts[1]), int(parts[2])
+                    sys_info.update({
+                        "disk_total_gb": round(tk / 1_048_576, 1),
+                        "disk_used_gb": round(uk / 1_048_576, 1),
+                        "disk_percent": round(uk / tk * 100, 1) if tk else 0,
+                    })
+        except Exception:
+            pass
+        result["system"] = sys_info
+
+    # ── Per-session attribution ───────────────────────────────────────────────
+    try:
+        tok_data = get_daily_token_stats()
+        tokens_by_name = {s["name"]: s for s in tok_data.get("sessions", [])}
+    except Exception:
+        tokens_by_name = {}
+
+    # Collect active session shell PIDs via tmux
+    shell_pids: dict = {}
+    if CC_SESSIONS.exists():
+        for env_file in sorted(CC_SESSIONS.glob("*.env")):
+            name = env_file.stem
+            try:
+                r = subprocess.run(
+                    ["tmux", "display-message", "-t", name, "-p", "#{pane_pid}"],
+                    capture_output=True, text=True, timeout=2,
+                )
+                if r.returncode == 0 and r.stdout.strip().isdigit():
+                    shell_pids[name] = int(r.stdout.strip())
+            except Exception:
+                pass
+
+    # Prime CPU % readings for all active sessions (one sleep covers all)
+    all_procs: dict = {}
+    _has_psutil = False
+    try:
+        import psutil as _psutil  # type: ignore
+        _has_psutil = True
+        for sname, pid in shell_pids.items():
+            try:
+                proc = _psutil.Process(pid)
+                procs = [proc] + proc.children(recursive=True)
+                alive = [p for p in procs if p.is_running()]
+                for p in alive:
+                    try:
+                        p.cpu_percent(interval=None)  # prime
+                    except Exception:
+                        pass
+                all_procs[sname] = alive
+            except Exception:
+                pass
+        if all_procs:
+            time.sleep(0.15)  # single sleep for all sessions
+    except ImportError:
+        pass
+
+    # Build session data list
+    if CC_SESSIONS.exists():
+        for env_file in sorted(CC_SESSIONS.glob("*.env")):
+            name = env_file.stem
+            s_data: dict = {
+                "name": name,
+                "pids": [],
+                "cpu_percent": 0.0,
+                "rss_mb": 0.0,
+                "memory_file_kb": 0.0,
+                "tokens_today": 0,
+                "token_input": 0,
+                "token_output": 0,
+                "last_active": None,
+                "active": name in shell_pids,
+            }
+            mem_file = CC_MEMORY / f"{name}.md"
+            if mem_file.exists():
+                s_data["memory_file_kb"] = round(mem_file.stat().st_size / 1024, 1)
+            tok = tokens_by_name.get(name, {})
+            s_data["tokens_today"] = tok.get("total", 0)
+            s_data["token_input"] = tok.get("input", 0)
+            s_data["token_output"] = tok.get("output", 0)
+            s_data["last_active"] = tok.get("last_active")
+            if _has_psutil and name in all_procs:
+                import psutil as _psutil  # type: ignore
+                total_rss = 0
+                total_cpu = 0.0
+                pids = []
+                for p in all_procs[name]:
+                    try:
+                        total_rss += p.memory_info().rss
+                        total_cpu += p.cpu_percent(interval=None)
+                        pids.append(p.pid)
+                    except Exception:
+                        pass
+                s_data["pids"] = pids
+                s_data["rss_mb"] = round(total_rss / 1_048_576, 1)
+                s_data["cpu_percent"] = round(total_cpu, 1)
+            elif name in shell_pids:
+                # psutil unavailable — fallback to ps for the shell process only
+                try:
+                    ps_out = subprocess.run(
+                        ["ps", "-o", "pid=,rss=,pcpu=", "-p", str(shell_pids[name])],
+                        capture_output=True, text=True, timeout=3,
+                    )
+                    for line in ps_out.stdout.splitlines():
+                        parts = line.split()
+                        if len(parts) >= 3:
+                            s_data["pids"].append(int(parts[0]))
+                            s_data["rss_mb"] += round(int(parts[1]) / 1024, 1)
+                            s_data["cpu_percent"] += float(parts[2])
+                except Exception:
+                    pass
+            result["sessions"].append(s_data)
+
+    return result
+
+
 def _detect_claude_status(raw_output: str) -> str:
     """Detect Claude Code status from tmux output.
 
@@ -6786,6 +6966,64 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     #map-view.sidebar-collapsed .map-geocoder-wrap { display: none; }
   }
 
+  /* ── Metrics view ──────────────────────────────────────────────────────────── */
+  #metrics-view { height: calc(100dvh - 110px); display: flex; flex-direction: row; overflow: hidden; position: relative; }
+  .metrics-sidebar { width: 220px; min-width: 180px; border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; background: var(--card); transition: transform 0.2s ease, opacity 0.2s ease; }
+  .metrics-sidebar.collapsed { transform: translateX(-110%); opacity: 0; pointer-events: none; position: absolute; }
+  .metrics-sidebar-hdr { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px 8px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .metrics-session-list { flex: 1; overflow-y: auto; padding: 4px 0; }
+  .metrics-session-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; transition: background 0.1s; border-bottom: 1px solid rgba(255,255,255,0.03); }
+  .metrics-session-item:hover { background: rgba(255,255,255,0.04); }
+  .metrics-session-item.active { background: rgba(88,166,255,0.1); }
+  .metrics-session-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  .metrics-session-info { flex: 1; min-width: 0; }
+  .metrics-session-name { font-size: 0.82rem; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .metrics-session-sub { font-size: 0.71rem; color: var(--dim); margin-top: 1px; }
+  .metrics-main { flex: 1; overflow-y: auto; padding: 16px; min-width: 0; position: relative; }
+  .metrics-expand-btn { display: none; position: absolute; top: 10px; left: 10px; z-index: 2; background: transparent; border: none; color: var(--dim); cursor: pointer; padding: 4px; border-radius: 4px; align-items: center; justify-content: center; }
+  .metrics-expand-btn:hover { background: rgba(139,148,158,0.12); color: var(--text); }
+  #metrics-view.sidebar-collapsed .metrics-expand-btn { display: flex; }
+  .metrics-hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
+  .metrics-hdr-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .metrics-hdr-title { font-weight: 700; font-size: 1rem; }
+  .metrics-hostname { font-size: 0.8rem; color: var(--dim); font-family: monospace; }
+  .metrics-uptime { font-size: 0.78rem; color: var(--dim); background: var(--hover); border-radius: 4px; padding: 2px 7px; }
+  .metrics-no-psutil { background: rgba(249,115,22,0.08); border: 1px solid rgba(249,115,22,0.2); border-radius: 8px; padding: 10px 14px; font-size: 0.8rem; color: var(--text); margin-bottom: 16px; line-height: 1.5; }
+  .metrics-no-psutil code { font-size: 0.82rem; color: #f97316; }
+  .metrics-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(155px, 1fr)); gap: 10px; margin-bottom: 20px; }
+  .metrics-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+  .metrics-card-title { font-size: 0.68rem; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+  .metrics-card-value { font-size: 1.45rem; font-weight: 700; color: var(--text); line-height: 1; margin-bottom: 3px; }
+  .metrics-card-value span { font-size: 0.65em; font-weight: 400; color: var(--dim); }
+  .metrics-card-sub { font-size: 0.71rem; color: var(--dim); margin-bottom: 8px; }
+  .metrics-gauge { height: 5px; background: var(--border); border-radius: 3px; overflow: hidden; }
+  .metrics-gauge-fill { height: 100%; border-radius: 3px; transition: width 0.5s ease; }
+  .metrics-gauge-fill.low { background: #3fb950; }
+  .metrics-gauge-fill.mid { background: #f0a742; }
+  .metrics-gauge-fill.high { background: #f85149; }
+  .metrics-section-title { font-size: 0.7rem; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; }
+  .metrics-load-row { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+  .metrics-load-block { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 8px 16px; text-align: center; min-width: 72px; }
+  .metrics-load-val { font-size: 1.05rem; font-weight: 700; line-height: 1; }
+  .metrics-load-lbl { font-size: 0.65rem; color: var(--dim); margin-top: 3px; }
+  .metrics-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 20px; }
+  .metrics-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+  .metrics-table th { padding: 8px 12px; text-align: left; font-size: 0.68rem; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: 0.05em; background: var(--card); border-bottom: 1px solid var(--border); white-space: nowrap; }
+  .metrics-table td { padding: 9px 12px; border-bottom: 1px solid rgba(255,255,255,0.04); color: var(--text); white-space: nowrap; }
+  .metrics-table tr:last-child td { border-bottom: none; }
+  .metrics-table tr:hover td { background: rgba(255,255,255,0.03); cursor: pointer; }
+  .metrics-table tr.row-selected td { background: rgba(88,166,255,0.08); }
+  .metrics-mini-bar { display: inline-block; width: 50px; height: 4px; background: var(--border); border-radius: 2px; vertical-align: middle; margin-left: 4px; overflow: hidden; }
+  .metrics-mini-bar-fill { height: 100%; border-radius: 2px; }
+  @media (max-width: 600px) {
+    #metrics-view { height: calc(100dvh - 122px); position: relative; }
+    .metrics-sidebar { position: absolute; top: 0; left: 0; bottom: 0; z-index: 10; width: 100% !important; min-width: 0 !important; border-right: none; }
+    .metrics-sidebar.collapsed { width: 100% !important; opacity: 0; pointer-events: none; position: absolute; }
+    .metrics-main { width: 100%; padding: 40px 12px 12px; }
+    .metrics-cards { grid-template-columns: repeat(2, 1fr); }
+    .metrics-expand-btn { display: flex; }
+  }
+
 </style>
 </head>
 <body>
@@ -6953,6 +7191,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <button id="tab-notes" onclick="switchView('notes')">Notes</button>
   <button id="tab-crm" onclick="switchView('crm')">People</button>
   <button id="tab-map" onclick="switchView('map')">Map</button>
+  <button id="tab-metrics" onclick="switchView('metrics')">Metrics</button>
 </div>
 <div class="tab-customize-wrap">
   <button class="tab-customize-btn" onclick="event.stopPropagation();toggleTabCustomizer()" title="Show/hide tabs">&#x229E;</button>
@@ -7426,6 +7665,23 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <button class="btn" onclick="_crmCloseLog()">Cancel</button>
       <button class="btn primary" onclick="_crmSubmitLog()">Save</button>
     </div>
+  </div>
+</div>
+
+<!-- Metrics view -->
+<div id="metrics-view" style="display:none;flex-direction:row;overflow:hidden;">
+  <!-- Sidebar: session list -->
+  <div class="metrics-sidebar" id="metrics-sidebar">
+    <div class="metrics-sidebar-hdr">
+      <span style="font-weight:600;font-size:0.85rem;">Sessions</span>
+      <button class="notes-toggle-btn" onclick="_metricsToggleSidebar()" title="Collapse sidebar"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/></svg></button>
+    </div>
+    <div id="metrics-session-list" class="metrics-session-list"></div>
+  </div>
+  <!-- Main pane -->
+  <div class="metrics-main" id="metrics-main">
+    <button class="metrics-expand-btn" onclick="_metricsToggleSidebar()" title="Show sessions list"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m14 9 3 3-3 3"/></svg></button>
+    <div id="metrics-content"><div style="color:var(--dim);font-size:0.85rem;padding:40px;text-align:center;">Loading metrics&hellip;</div></div>
   </div>
 </div>
 
@@ -9425,6 +9681,7 @@ const ALL_TABS = [
   { id: 'notes',         label: 'Notes' },
   { id: 'crm',           label: 'People' },
   { id: 'map',           label: 'Map' },
+  { id: 'metrics',       label: 'Metrics' },
 ];
 
 let hiddenTabs = (function() {
@@ -9433,7 +9690,7 @@ let hiddenTabs = (function() {
     if (s !== null) return new Set(JSON.parse(s));
   } catch(e) {}
   // Default for new installs: show only sessions, board, files, notes, workspace, crm
-  return new Set(['calendar','scheduler','reports','notifications','logs','browser','email']);
+  return new Set(['calendar','scheduler','reports','notifications','logs','browser','email','metrics']);
 })();
 
 let tabOrder = (function() {
@@ -13974,6 +14231,7 @@ function switchView(view) {
   document.getElementById('notes-view').style.display = view === 'notes' ? 'flex' : 'none';
   document.getElementById('crm-view').style.display = view === 'crm' ? 'flex' : 'none';
   document.getElementById('map-view').style.display = view === 'map' ? 'flex' : 'none';
+  document.getElementById('metrics-view').style.display = view === 'metrics' ? 'flex' : 'none';
   document.getElementById('tab-sessions').classList.toggle('active', view === 'sessions');
   document.getElementById('tab-board').classList.toggle('active', view === 'board');
   document.getElementById('tab-scheduler').classList.toggle('active', view === 'scheduler');
@@ -13984,8 +14242,10 @@ function switchView(view) {
   document.getElementById('tab-notes').classList.toggle('active', view === 'notes');
   document.getElementById('tab-crm').classList.toggle('active', view === 'crm');
   document.getElementById('tab-map').classList.toggle('active', view === 'map');
+  document.getElementById('tab-metrics').classList.toggle('active', view === 'metrics');
   if (view === 'crm') { _crmDirty = false; _crmLoad(); _crmApplySidebarState(); } // always refresh on tab switch
   if (view === 'map') { _mapLoad(); _mapInit(); }
+  if (view === 'metrics') { _metricsLoad(); _metricsApplySidebarState(); } // always refresh on tab switch
   if (view === 'files') loadFiles(_filesPath);
   else { try { if (location.hash.startsWith('#path=')) history.replaceState({}, '', location.pathname); } catch(e) {} }
   if (view === 'browser') _rbLoadProfiles();
@@ -17724,6 +17984,222 @@ async function pullFromRemote(btn) {
 </script>
 
 <script>
+// ── Metrics tab ───────────────────────────────────────────────────────────────
+let _metricsSidebarOpen = localStorage.getItem('amux_metrics_sidebar') !== 'closed';
+let _metricsData = null;
+let _metricsSelectedSession = null;
+
+function _metricsToggleSidebar() {
+  _metricsSidebarOpen = !_metricsSidebarOpen;
+  localStorage.setItem('amux_metrics_sidebar', _metricsSidebarOpen ? 'open' : 'closed');
+  _metricsApplySidebarState();
+}
+
+function _metricsApplySidebarState() {
+  const view = document.getElementById('metrics-view');
+  const sidebar = document.getElementById('metrics-sidebar');
+  if (!view || !sidebar) return;
+  sidebar.classList.toggle('collapsed', !_metricsSidebarOpen);
+  view.classList.toggle('sidebar-collapsed', !_metricsSidebarOpen);
+}
+
+function _metricsLoad() {
+  const btn = document.getElementById('metrics-refresh-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '\u21BB Loading\u2026'; }
+  fetch(API + '/api/metrics')
+    .then(r => r.ok ? r.json() : Promise.reject(r.status))
+    .then(data => { _metricsData = data; _metricsRender(); })
+    .catch(e => {
+      const el = document.getElementById('metrics-content');
+      if (el) el.innerHTML = '<div style="color:var(--red);padding:20px;font-size:0.85rem;">Failed to load metrics: ' + e + '</div>';
+    })
+    .finally(() => { if (btn) { btn.disabled = false; btn.textContent = '\u21BB Refresh'; } });
+}
+
+function _metricsGaugeCls(pct) {
+  return pct < 50 ? 'low' : pct < 80 ? 'mid' : 'high';
+}
+
+function _metricsGaugeColor(cls) {
+  return cls === 'low' ? '#3fb950' : cls === 'mid' ? '#f0a742' : '#f85149';
+}
+
+function _metricsFormatUptime(s) {
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  return d > 0 ? d + 'd ' + h + 'h' : h > 0 ? h + 'h ' + m + 'm' : m + 'm';
+}
+
+function _metricsRelTime(ts) {
+  if (!ts) return '\u2014';
+  try {
+    const diff = (Date.now() - new Date(ts).getTime()) / 1000;
+    if (diff < 60) return 'just now';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    return Math.floor(diff / 86400) + 'd ago';
+  } catch(e) { return ts; }
+}
+
+function _metricsRender() {
+  const data = _metricsData;
+  if (!data) return;
+  const sys = data.system || {};
+  const sessions = data.sessions || [];
+
+  // Sidebar session list
+  const listEl = document.getElementById('metrics-session-list');
+  if (listEl) {
+    if (!sessions.length) {
+      listEl.innerHTML = '<div style="padding:16px 12px;font-size:0.8rem;color:var(--dim);">No sessions found</div>';
+    } else {
+      listEl.innerHTML = sessions.map(s => {
+        const cls = _metricsGaugeCls(s.cpu_percent);
+        const dotBg = s.active ? _metricsGaugeColor(cls) : 'transparent';
+        const dotBorder = s.active ? 'none' : '1.5px solid var(--dim)';
+        const sel = _metricsSelectedSession === s.name ? ' active' : '';
+        const sub = s.active ? (s.cpu_percent.toFixed(1) + '% \u00B7 ' + (s.rss_mb > 0 ? s.rss_mb.toFixed(0) + ' MB' : 'idle')) : 'stopped';
+        return `<div class="metrics-session-item${sel}" onclick="_metricsSelectSession('${s.name}')">
+          <div class="metrics-session-dot" style="background:${dotBg};border:${dotBorder};"></div>
+          <div class="metrics-session-info">
+            <div class="metrics-session-name">${s.name}</div>
+            <div class="metrics-session-sub">${sub}</div>
+          </div>
+        </div>`;
+      }).join('');
+    }
+  }
+
+  // Main content
+  const content = document.getElementById('metrics-content');
+  if (!content) return;
+
+  let html = '';
+
+  // Header
+  html += `<div class="metrics-hdr">
+    <div class="metrics-hdr-left">
+      <span class="metrics-hdr-title">System Metrics</span>
+      ${sys.hostname ? `<span class="metrics-hostname">${sys.hostname}</span>` : ''}
+      ${sys.uptime_seconds ? `<span class="metrics-uptime">up ${_metricsFormatUptime(sys.uptime_seconds)}</span>` : ''}
+    </div>
+    <button class="btn" id="metrics-refresh-btn" onclick="_metricsLoad()" style="font-size:0.8rem;padding:5px 12px;">\u21BB Refresh</button>
+  </div>`;
+
+  if (!sys.psutil) {
+    html += `<div class="metrics-no-psutil">
+      \u26A0\uFE0F Process-level CPU &amp; RAM per session requires psutil &mdash;
+      run <code>pip3 install psutil</code> then restart the server.
+      System metrics are shown via fallback commands.
+    </div>`;
+  }
+
+  // System metric cards
+  html += '<div class="metrics-cards">';
+  if (sys.cpu_percent !== undefined) {
+    const cls = _metricsGaugeCls(sys.cpu_percent);
+    html += `<div class="metrics-card">
+      <div class="metrics-card-title">CPU</div>
+      <div class="metrics-card-value">${sys.cpu_percent.toFixed(1)}<span>%</span></div>
+      <div class="metrics-card-sub">${sys.cpu_count || ''} logical cores</div>
+      <div class="metrics-gauge"><div class="metrics-gauge-fill ${cls}" style="width:${Math.min(100,sys.cpu_percent)}%"></div></div>
+    </div>`;
+  }
+  if (sys.ram_total_mb) {
+    const cls = _metricsGaugeCls(sys.ram_percent || 0);
+    html += `<div class="metrics-card">
+      <div class="metrics-card-title">Memory (RAM)</div>
+      <div class="metrics-card-value">${(sys.ram_used_mb / 1024).toFixed(1)}<span> GB</span></div>
+      <div class="metrics-card-sub">of ${(sys.ram_total_mb / 1024).toFixed(1)} GB &mdash; ${(sys.ram_percent || 0).toFixed(0)}%</div>
+      <div class="metrics-gauge"><div class="metrics-gauge-fill ${cls}" style="width:${Math.min(100, sys.ram_percent || 0)}%"></div></div>
+    </div>`;
+  }
+  if (sys.swap_total_mb !== undefined) {
+    const swapPct = sys.swap_total_mb > 0 ? sys.swap_used_mb / sys.swap_total_mb * 100 : 0;
+    const cls = _metricsGaugeCls(swapPct);
+    const swapVal = sys.swap_used_mb < 1024 ? sys.swap_used_mb.toFixed(0) + ' MB' : (sys.swap_used_mb / 1024).toFixed(1) + ' GB';
+    const swapTot = sys.swap_total_mb < 1024 ? sys.swap_total_mb.toFixed(0) + ' MB' : (sys.swap_total_mb / 1024).toFixed(1) + ' GB';
+    html += `<div class="metrics-card">
+      <div class="metrics-card-title">Swap</div>
+      <div class="metrics-card-value" style="font-size:1.2rem;">${swapVal}</div>
+      <div class="metrics-card-sub">of ${swapTot} &mdash; ${swapPct.toFixed(0)}%</div>
+      <div class="metrics-gauge"><div class="metrics-gauge-fill ${cls}" style="width:${Math.min(100, swapPct)}%"></div></div>
+    </div>`;
+  }
+  if (sys.disk_total_gb) {
+    const cls = _metricsGaugeCls(sys.disk_percent || 0);
+    html += `<div class="metrics-card">
+      <div class="metrics-card-title">Disk (/)</div>
+      <div class="metrics-card-value">${sys.disk_used_gb}<span> GB</span></div>
+      <div class="metrics-card-sub">of ${sys.disk_total_gb} GB &mdash; ${(sys.disk_percent || 0).toFixed(0)}%</div>
+      <div class="metrics-gauge"><div class="metrics-gauge-fill ${cls}" style="width:${Math.min(100, sys.disk_percent || 0)}%"></div></div>
+    </div>`;
+  }
+  html += '</div>';
+
+  // Load averages
+  if (sys.load_avg && sys.load_avg.length) {
+    html += '<div class="metrics-section-title">Load Average</div><div class="metrics-load-row">';
+    const labels = ['1 min', '5 min', '15 min'];
+    sys.load_avg.forEach((v, i) => {
+      const pct = sys.cpu_count ? Math.min(100, v / sys.cpu_count * 100) : 0;
+      const cls = _metricsGaugeCls(pct);
+      html += `<div class="metrics-load-block">
+        <div class="metrics-load-val" style="color:${_metricsGaugeColor(cls)}">${v.toFixed(2)}</div>
+        <div class="metrics-load-lbl">${labels[i] || ''}</div>
+      </div>`;
+    });
+    html += '</div>';
+  }
+
+  // Session breakdown table
+  html += '<div class="metrics-section-title">Session Breakdown</div>';
+  html += '<div class="metrics-table-wrap"><table class="metrics-table"><thead><tr>';
+  html += '<th>Session</th><th>Status</th><th>CPU %</th><th>RAM (MB)</th><th>Memory File</th><th>Tokens Today</th><th>Last Active</th><th>Processes</th>';
+  html += '</tr></thead><tbody>';
+
+  if (!sessions.length) {
+    html += '<tr><td colspan="8" style="text-align:center;color:var(--dim);padding:20px;">No sessions found</td></tr>';
+  } else {
+    const sorted = [...sessions].sort((a, b) => (b.cpu_percent - a.cpu_percent) || (b.rss_mb - a.rss_mb));
+    sorted.forEach(s => {
+      const sel = _metricsSelectedSession === s.name ? ' row-selected' : '';
+      const cpuCls = _metricsGaugeCls(s.cpu_percent);
+      const cpuColor = s.active ? _metricsGaugeColor(cpuCls) : 'var(--dim)';
+      const statusHtml = s.active
+        ? '<span style="color:#3fb950;">&#x25CF;</span> active'
+        : '<span style="color:var(--dim);">&#x25CB;</span> stopped';
+      const cpuHtml = s.active
+        ? `<span style="color:${cpuColor};font-weight:600;">${s.cpu_percent.toFixed(1)}%</span>
+           <span class="metrics-mini-bar"><span class="metrics-mini-bar-fill metrics-gauge-fill ${cpuCls}" style="width:${Math.min(100,s.cpu_percent)}%"></span></span>`
+        : '\u2014';
+      const ramHtml = s.active && s.rss_mb > 0 ? s.rss_mb.toFixed(0) : '\u2014';
+      const memFile = s.memory_file_kb > 0 ? s.memory_file_kb.toFixed(1) + ' KB' : '\u2014';
+      const tokens = s.tokens_today > 0 ? s.tokens_today.toLocaleString() : '\u2014';
+      const lastAct = _metricsRelTime(s.last_active);
+      const procs = s.pids && s.pids.length ? s.pids.length : (s.active ? '1' : '\u2014');
+      html += `<tr class="${sel}" onclick="_metricsSelectSession('${s.name}')">
+        <td><strong>${s.name}</strong></td>
+        <td style="font-size:0.78rem;">${statusHtml}</td>
+        <td>${cpuHtml}</td>
+        <td>${ramHtml}</td>
+        <td style="font-size:0.78rem;color:var(--dim);">${memFile}</td>
+        <td style="font-size:0.78rem;">${tokens}</td>
+        <td style="font-size:0.78rem;color:var(--dim);">${lastAct}</td>
+        <td style="font-size:0.78rem;color:var(--dim);">${procs}</td>
+      </tr>`;
+    });
+  }
+  html += '</tbody></table></div>';
+
+  content.innerHTML = html;
+  _metricsApplySidebarState();
+}
+
+function _metricsSelectSession(name) {
+  _metricsSelectedSession = _metricsSelectedSession === name ? null : name;
+  _metricsRender();
+}
+
 // ── Notes tab ─────────────────────────────────────────────────────────────────
 let _notesActive = null; // { path, title }
 let _notesTrashOpen = false;
@@ -19730,6 +20206,10 @@ class CCHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(img_data)
             return
+
+        # GET /api/metrics — system + per-session resource metrics
+        if method == "GET" and path == "/api/metrics":
+            return self._json(get_system_metrics())
 
         # GET /api/stats/daily
         if method == "GET" and path == "/api/stats/daily":
