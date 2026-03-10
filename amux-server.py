@@ -99,6 +99,7 @@ _sse_cache = {
     "sessions": {"data": None, "json": "", "time": 0},
     "board": {"data": None, "json": "", "time": 0},
 }
+_sse_cache_lock = threading.Lock()  # prevents thundering herd on cache refresh
 _SSE_CACHE_TTL = 2  # seconds
 
 # ── Structured event log (in-memory ring buffer, 2 000 events) ─────────────────
@@ -2331,6 +2332,26 @@ def _update_meta(name: str, **kwargs):
     _save_meta(name, meta)
 
 
+def _summarize_task_bg(session_name: str, text: str):
+    """Call Claude Haiku in a background thread to summarize a message into a 3-word task label."""
+    def _run():
+        try:
+            import anthropic
+            client = anthropic.Anthropic()
+            msg = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=20,
+                messages=[{"role": "user", "content":
+                    f"Summarize this task in 3 words or fewer (title case, no punctuation): {text[:500]}"}],
+            )
+            summary = msg.content[0].text.strip().rstrip(".")
+            if summary:
+                _update_meta(session_name, task_summary=summary)
+        except Exception:
+            pass
+    threading.Thread(target=_run, daemon=True).start()
+
+
 _DEFAULT_STATUSES = [
     {"id": "backlog",   "label": "Backlog"},
     {"id": "todo",      "label": "To Do"},
@@ -3308,7 +3329,7 @@ def list_sessions() -> list:
             "active_model": active_model,
             "session_created": session_created,
             "task_time": task_time,
-            "task_name": _doing_tasks.get(name) or meta.get("last_send_text", "") or cfg.get("CC_DESC", "") or "",
+            "task_name": _doing_tasks.get(name) or meta.get("task_summary", "") or cfg.get("CC_DESC", "") or "",
             "tokens": tokens,
             "branch": cfg.get("CC_BRANCH", ""),
             "mcp": cfg.get("CC_MCP", ""),
@@ -19907,12 +19928,18 @@ class CCHandler(BaseHTTPRequestHandler):
                     break
 
                 # Sessions — use shared cache to avoid redundant subprocess calls
+                # Lock prevents thundering herd: only one thread refreshes at a time
                 sc = _sse_cache["sessions"]
                 if now - sc["time"] > _SSE_CACHE_TTL:
-                    data = list_sessions()
-                    sc["data"] = data
-                    sc["json"] = json.dumps(data, sort_keys=True)
-                    sc["time"] = now
+                    if _sse_cache_lock.acquire(blocking=False):
+                        try:
+                            if time.time() - sc["time"] > _SSE_CACHE_TTL:  # double-check
+                                data = list_sessions()
+                                sc["data"] = data
+                                sc["json"] = json.dumps(data, sort_keys=True)
+                                sc["time"] = time.time()
+                        finally:
+                            _sse_cache_lock.release()
                 if sc["json"] != last_sessions_json:
                     last_sessions_json = sc["json"]
                     self.wfile.write(f"data: {json.dumps({'type': 'sessions', 'payload': sc['data']})}\n\n".encode())
@@ -19921,10 +19948,15 @@ class CCHandler(BaseHTTPRequestHandler):
                 # Board — use shared cache
                 bc = _sse_cache["board"]
                 if now - bc["time"] > _SSE_CACHE_TTL:
-                    data = _load_board()
-                    bc["data"] = data
-                    bc["json"] = json.dumps(data, sort_keys=True)
-                    bc["time"] = now
+                    if _sse_cache_lock.acquire(blocking=False):
+                        try:
+                            if time.time() - bc["time"] > _SSE_CACHE_TTL:
+                                data = _load_board()
+                                bc["data"] = data
+                                bc["json"] = json.dumps(data, sort_keys=True)
+                                bc["time"] = time.time()
+                        finally:
+                            _sse_cache_lock.release()
                 if bc["json"] != last_board_json:
                     last_board_json = bc["json"]
                     self.wfile.write(f"data: {json.dumps({'type': 'board', 'payload': bc['data']})}\n\n".encode())
@@ -22455,6 +22487,7 @@ p{{color:#888;margin:12px 0 28px;font-size:0.9rem;line-height:1.5}}
                 ok, msg = send_text(name, text)
                 if ok:
                     _update_meta(name, last_send=int(time.time()), last_send_text=text[:200])
+                    _summarize_task_bg(name, text)
                 # 409 = session exists but is not running (user-caused, not a server error)
                 code = 200 if ok else (409 if msg == "not running" else 500)
                 return self._json({"ok": ok, "message": msg}, code)
