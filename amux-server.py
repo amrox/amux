@@ -11698,10 +11698,8 @@ function slashAcPick(i) {
   if (el._atItems) {
     el._atSel = i;
     _atInsert(inp, el);
-    // Auto-send if the message has content beyond just the @mention itself
-    const val = inp.value.trim();
-    const onlyMention = /^@[\w][\w.-]*\s*$/.test(val);
-    if (!onlyMention) { setTimeout(sendPeekCmd, 0); return; }
+    inp.focus({ preventScroll: true });
+    return;
   } else {
     inp.value = slashAcItems[i].cmd;
     el.classList.remove('open');
@@ -14755,7 +14753,7 @@ function _mapRenderMarkers() {
         '<div style="font-weight:600;margin-bottom:4px">' + escHtml(pin.name||'Unnamed') + '</div>' +
         (pin.desc ? '<div style="font-size:12px;color:#888;margin-bottom:4px">' + escHtml(pin.desc) + '</div>' : '') +
         (tagChips ? '<div style="margin-bottom:4px">' + tagChips + '</div>' : '') +
-        '<div style="font-size:11px;color:#999;margin-bottom:6px">' + parseFloat(pin.lat).toFixed(5) + ', ' + parseFloat(pin.lng).toFixed(5) + '</div>' +
+        '<div style="font-size:11px;color:#999;margin-bottom:6px">' + parseFloat(pin.lat).toFixed(5) + ', ' + parseFloat(pin.lng).toFixed(5) + ' \u2022 <a href="https://www.google.com/maps?q=' + parseFloat(pin.lat).toFixed(6) + ',' + parseFloat(pin.lng).toFixed(6) + '" target="_blank" rel="noopener" style="color:var(--accent,#58a6ff);text-decoration:none">Google Maps \u2197</a></div>' +
         '<button onclick="_mapOpenPinModal(\x27' + pin.id + '\x27)" style="padding:2px 8px;font-size:12px;cursor:pointer;border:1px solid #aaa;border-radius:4px;background:transparent;color:inherit">Edit</button>' +
       '</div>'
     );
