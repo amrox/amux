@@ -450,7 +450,8 @@ def _reaper():
         except Exception as e:
             print(f"[reaper] error: {e}")
 
-threading.Thread(target=_reaper, daemon=True).start()
+# Reaper disabled — not needed with current user count
+# threading.Thread(target=_reaper, daemon=True).start()
 
 # ── Proxy helper ───────────────────────────────────────────────────────────────
 def proxy(handler, port, path, qs, user_email="", user_id=None):
