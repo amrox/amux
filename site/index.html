@@ -1059,7 +1059,8 @@ inlineVid.addEventListener('play', function() { inlineWrap.classList.add('playin
 // Video lightbox
 var lb = document.getElementById('demo-lightbox');
 var vid = document.getElementById('demo-video');
-document.getElementById('demo-btn').addEventListener('click', function() {
+var demoBtn = document.getElementById('demo-btn');
+if (demoBtn) demoBtn.addEventListener('click', function() {
   lb.classList.add('open'); vid.currentTime = 0; vid.play();
 });
 function closeLightbox() { lb.classList.remove('open'); vid.pause(); }
