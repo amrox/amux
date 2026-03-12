@@ -623,6 +623,15 @@ body { overflow-x: hidden; }
 .footer-bottom a { color: var(--dim); text-decoration: none; }
 .footer-bottom a:hover { color: var(--text); }
 .footer-bottom-links { display: flex; gap: 1.25rem; }
+
+/* ── HERO EYEBROW + SOCIAL ── */
+.hero-eyebrow {
+  font-size: 0.72rem; color: var(--muted); letter-spacing: 0.05em;
+  margin-bottom: 1.5rem; font-family: var(--sans);
+}
+.hero-social {
+  margin-top: 1.25rem; display: flex; justify-content: center;
+}
 </style>
 </head>
 <body>
@@ -632,7 +641,6 @@ body { overflow-x: hidden; }
   <nav>
     <a href="/guides/" class="hide-mobile">guides</a>
     <a href="/compare/" class="hide-mobile">compare</a>
-    <a href="/demos/" class="hide-mobile">demos</a>
     <a href="/blog/" class="hide-mobile">blog</a>
     <button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode"><span class="icon-sun">&#9788;</span><span class="icon-moon">&#9790;</span></button>
     <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener" class="nav-cta gh-nav-btn">
@@ -645,17 +653,15 @@ body { overflow-x: hidden; }
 
 <!-- HERO -->
 <div class="hero">
-  <h1>Infra for parallel AI coding agents</h1>
-  <p class="hero-sub">Run dozens of Claude Code sessions unattended via tmux. Self-healing watchdog, web dashboard, mobile PWA, agent-to-agent orchestration.</p>
-  <ul class="hero-features">
-    <li>Self-healing watchdog -- auto-compacts, restarts, and replays on crash</li>
-    <li>Mobile-first PWA with offline queue and Background Sync</li>
-    <li>Single Python file, zero dependencies beyond python3 and tmux</li>
-  </ul>
+  <div class="hero-eyebrow">Open source &middot; Python 3 + tmux &middot; MIT license</div>
+  <h1>Run dozens of Claude Code<br>agents while you sleep</h1>
+  <p class="hero-sub">Self-healing, parallel AI coding sessions with a web dashboard, mobile app, and agent-to-agent orchestration. Zero external dependencies.</p>
   <div class="hero-ctas">
-    <a class="primary" href="https://github.com/mixpeek/amux#install">get started</a>
+    <a class="primary" href="https://github.com/mixpeek/amux#install">get started free</a>
+    <button id="demo-btn">watch demo &rsaquo;</button>
+  </div>
+  <div class="hero-social">
     <iframe src="https://ghbtns.com/github-btn.html?user=mixpeek&repo=amux&type=star&count=true&size=large" frameborder="0" scrolling="0" width="160" height="30" title="GitHub Stars" class="gh-iframe-hero"></iframe>
-    <button id="demo-btn">watch demo</button>
   </div>
 </div>
 
@@ -666,45 +672,14 @@ body { overflow-x: hidden; }
       <div class="terminal-dot r"></div>
       <div class="terminal-dot y"></div>
       <div class="terminal-dot g"></div>
-      <span class="terminal-bar-title">~/Dev/myproject</span>
+      <span class="terminal-bar-title">get started in 30 seconds</span>
     </div>
     <div class="terminal-body">
       <div><span class="prompt">$</span> <span class="cmd">git clone https://github.com/mixpeek/amux &amp;&amp; cd amux &amp;&amp; ./install.sh</span></div>
       <div><span class="prompt">$</span> <span class="cmd">amux register api</span> <span class="flag">--dir</span> <span class="cmd">~/Dev/api</span> <span class="flag">--yolo</span></div>
-      <div><span class="prompt">$</span> <span class="cmd">amux start api</span></div>
-      <div><span class="prompt">$</span> <span class="cmd">amux serve</span></div>
+      <div><span class="prompt">$</span> <span class="cmd">amux start api &amp;&amp; amux serve</span></div>
       <div><span class="ok">&#10003;</span> <span class="comment">Dashboard live at</span> <span class="url">https://localhost:8822</span></div>
     </div>
-  </div>
-</div>
-
-<hr class="divider">
-
-<!-- HOW IT'S DIFFERENT -->
-<div class="section-wide reveal">
-  <div class="section-label">How it's different</div>
-  <div class="section-title">amux is not another Claude wrapper</div>
-  <div class="section-desc">Claude Code runs one agent per terminal. amux runs dozens -- with monitoring, coordination, and mobile access that don't exist anywhere else.</div>
-  <div class="table-scroll">
-  <table class="diff-table">
-    <thead>
-      <tr>
-        <th></th>
-        <th class="col-amux">amux</th>
-        <th>Claude Code</th>
-        <th>Other wrappers</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr><td class="row-label">Parallel agents</td><td class="has">Unlimited, isolated tmux panes</td><td class="no">Single session per terminal</td><td class="partial">Limited or manual</td></tr>
-      <tr><td class="row-label">Mobile management</td><td class="has">PWA with offline queue + Background Sync</td><td class="no">Terminal only</td><td class="no">Not available</td></tr>
-      <tr><td class="row-label">Self-healing</td><td class="has">Watchdog auto-compacts, restarts, replays</td><td class="no">Crashes on context overflow</td><td class="partial">Basic restart only</td></tr>
-      <tr><td class="row-label">Agent coordination</td><td class="has">REST API + atomic task claiming</td><td class="no">No inter-agent communication</td><td class="partial">Shared filesystem at best</td></tr>
-      <tr><td class="row-label">Live monitoring</td><td class="has">SSE dashboard with status, spend, peek</td><td class="no">Must attach to terminal</td><td class="partial">Logs only</td></tr>
-      <tr><td class="row-label">Kanban + scheduling</td><td class="has">SQLite board, iCal sync, built-in cron</td><td class="no">None</td><td class="no">None</td></tr>
-      <tr><td class="row-label">Setup</td><td class="has">1 file, 0 deps, git clone + install.sh</td><td class="has">pip install</td><td class="partial">Docker, config files, API keys</td></tr>
-    </tbody>
-  </table>
   </div>
 </div>
 
@@ -713,76 +688,39 @@ body { overflow-x: hidden; }
 <!-- PROBLEMS -->
 <div class="section reveal" id="why">
   <div class="section-label">Why amux</div>
-  <div class="section-title">Problems it solves</div>
-  <div class="section-desc">Every friction point when running multiple Claude Code agents at scale.</div>
+  <div class="section-title">Claude Code at scale is painful</div>
+  <div class="section-desc">Running more than one agent in parallel exposes problems that don't exist in a single terminal session.</div>
   <div class="problems-grid">
     <div class="problem-card">
-      <div class="problem-card-label">01</div>
-      <div class="problem-pain">Claude crashes at 3am from context compaction</div>
-      <div class="problem-fix">Self-healing watchdog -- auto-compacts, restarts, replays last message</div>
+      <div class="problem-card-label">Crashes at 3am</div>
+      <div class="problem-pain">Context overflow kills sessions overnight. You wake up to nothing done.</div>
+      <div class="problem-fix">Watchdog auto-compacts, restarts, and replays the last message. Truly unattended.</div>
     </div>
     <div class="problem-card">
-      <div class="problem-card-label">02</div>
-      <div class="problem-pain">No way to monitor 10+ sessions from one place</div>
-      <div class="problem-fix">Web dashboard with live status, token spend, and session peek</div>
+      <div class="problem-card-label">No visibility</div>
+      <div class="problem-pain">Ten terminal tabs. No idea which agents are working, stuck, or idle.</div>
+      <div class="problem-fix">Live dashboard with status, token spend, peek mode, and mobile access from anywhere.</div>
     </div>
     <div class="problem-card">
-      <div class="problem-card-label">03</div>
-      <div class="problem-pain">Agents duplicate work on the same tasks</div>
-      <div class="problem-fix">Kanban board with atomic task claiming via SQLite CAS</div>
+      <div class="problem-card-label">Duplicated work</div>
+      <div class="problem-pain">Agents step on each other. Same task gets implemented twice.</div>
+      <div class="problem-fix">Kanban board with atomic SQLite task claiming. One agent, one task, no collisions.</div>
     </div>
     <div class="problem-card">
-      <div class="problem-card-label">04</div>
-      <div class="problem-pain">No way to manage agents from your phone</div>
-      <div class="problem-fix">Mobile PWA with offline support and Background Sync</div>
-    </div>
-    <div class="problem-card">
-      <div class="problem-card-label">05</div>
-      <div class="problem-pain">Agents cannot coordinate with each other</div>
-      <div class="problem-fix">REST API orchestration -- send, peek, claim tasks between sessions</div>
-    </div>
-    <div class="problem-card">
-      <div class="problem-card-label">06</div>
-      <div class="problem-pain">No persistent memory across restarts</div>
-      <div class="problem-fix">Per-session and global memory files, auto-snapshotted logs</div>
+      <div class="problem-card-label">Can't coordinate</div>
+      <div class="problem-pain">Agents are isolated. No way for one to delegate to or check on another.</div>
+      <div class="problem-fix">REST API with <code>$AMUX_URL</code> injected at startup. Agents send tasks and peek output via curl.</div>
     </div>
   </div>
 </div>
 
 <hr class="divider">
 
-<!-- FEATURES -->
-<div class="section reveal" id="features">
-  <div class="section-label">How it works</div>
-  <div class="section-title">Everything under the hood</div>
-  <div class="section-desc">A complete control plane for AI coding agents.</div>
-  <div class="features-list">
-    <div class="feat-item"><strong>Self-healing background watchdog</strong> <span>-- context low -> <code>/compact</code>; thinking-block corruption -> restart + replay; stuck waiting -> auto-respond. All silent.</span></div>
-    <div class="feat-item"><strong>Status from terminal output, not an API</strong> <span>-- parses ANSI-stripped tmux output to detect working / waiting / idle. No hooks, no patches, no modifications to Claude Code.</span></div>
-    <div class="feat-item"><strong>YOLO auto-responder</strong> <span>-- detects blocking tool-approval prompts via the "Esc to cancel" marker (never appears on open-ended questions) and auto-answers. Truly headless.</span></div>
-    <div class="feat-item"><strong>Agent-to-agent orchestration</strong> <span>-- <code>$AMUX_SESSION</code> and <code>$AMUX_URL</code> injected at startup; a shared global memory file gives every agent the full REST API reference. Agents discover peers and delegate work without being told how.</span></div>
-    <div class="feat-item"><strong>Atomic task claiming -- no lock broker</strong> <span>-- <code>POST /api/board/:id/claim</code> is a SQLite CAS. Dozens of agents race for the same queue -- no Redis, no duplicated work.</span></div>
-    <div class="feat-item"><strong>Single Python file, zero build step</strong> <span>-- Python server + full dashboard as inline HTML/CSS/JS. Edit it; it restarts via <code>os.execv</code> on save. Only deps: <code>python3</code> and <code>tmux</code>.</span></div>
-    <div class="feat-item"><strong>Parallel agents, permanent conversation IDs</strong> <span>-- any number of sessions, each with a UUID that survives stop/start. <code>amux exec myproject -- "..."</code> registers, starts, and sends in one shot.</span></div>
-    <div class="feat-item"><strong>Conversation fork</strong> <span>-- clone any session's JSONL history into a new session on a separate branch. Falls back to scrollback when JSONL isn't available.</span></div>
-    <div class="feat-item"><strong>Multi-pane workspace</strong> <span>-- full-screen tiled layout, each pane with its own send bar. Drag to rearrange; layout and named profiles persist.</span></div>
-    <div class="feat-item"><strong>Live peek -- including stopped sessions</strong> <span>-- scroll full scrollback, search, preview files, fire quick-actions without attaching. Output snapshots to disk every 60s and survives restarts.</span></div>
-    <div class="feat-item"><strong>Token tracking from JSONL</strong> <span>-- daily spend per session with cache reads broken out. Deduplicates by signature so restarts don't double-count.</span></div>
-    <div class="feat-item"><strong>People tab -- personal CRM</strong> <span>-- contacts with health indicators (days since last touch), full interaction log, follow-up queue, and auto-assigned PPL-N IDs. Fully accessible via CLI: <code>amux crm list/add/log/fu</code>. Optimistic UI throughout.</span></div>
-    <div class="feat-item"><strong>Kanban board with iCal sync</strong> <span>-- SQLite-backed with auto-generated keys, per-agent ownership, and custom columns. Exports iCal to S3 -- due dates appear in Google/Apple Calendar.</span></div>
-    <div class="feat-item"><strong>Built-in cron -- no crontab, no systemd</strong> <span>-- schedule one-time or recurring commands in any session. Next-run computed atomically in SQLite with missed-fire recovery, delivered via tmux.</span></div>
-    <div class="feat-item"><strong>Git-aware conflict detection</strong> <span>-- warns when two sessions share the same dir + branch, with a one-click helper to isolate each agent onto its own branch.</span></div>
-    <div class="feat-item"><strong>Web dashboard + PWA</strong> <span>-- installable on iOS and Android. Background Sync replays queued commands on reconnect. TLS auto-provisioned: Tailscale cert -> mkcert -> self-signed fallback.</span></div>
-  </div>
-</div>
-
-<hr class="divider">
-
-<!-- DASHBOARD -->
+<!-- DASHBOARD SLIDESHOW -->
 <div class="section-wide reveal" id="dashboard">
   <div class="section-label">Dashboard</div>
   <div class="section-title">Your fleet at a glance</div>
-  <div class="section-desc">Session cards, peek mode, kanban board, and search -- all in a single-page PWA.</div>
+  <div class="section-desc">Session cards, live terminal peek, kanban board, and a mobile PWA — all in one place.</div>
   <div class="slides-frame" id="slides-frame">
     <img src="screenshots/sessions-overview.jpg" alt="Session Dashboard" class="active">
     <img src="screenshots/session-expanded.jpg" alt="Session Card">
@@ -806,28 +744,44 @@ body { overflow-x: hidden; }
 
 <hr class="divider">
 
-<!-- CLI -->
-<div class="section reveal" id="cli">
-  <div class="section-label">CLI</div>
-  <div class="section-title">One command, any action</div>
-  <div class="section-desc">Session names support prefix matching -- <code style="color:var(--green)">amux a my</code> resolves to <code style="color:var(--dim)">myproject</code>.</div>
+<!-- FEATURES -->
+<div class="section reveal" id="features">
+  <div class="section-label">How it works</div>
+  <div class="section-title">Built for running agents at scale</div>
+  <div class="section-desc">Every piece exists because we hit the same wall running dozens of agents overnight.</div>
+  <div class="features-list">
+    <div class="feat-item"><strong>Self-healing watchdog</strong> <span>&mdash; context low &rarr; auto-compact; thinking-block corruption &rarr; restart + replay; stuck waiting &rarr; auto-respond. All silent, all night.</span></div>
+    <div class="feat-item"><strong>Agent-to-agent orchestration</strong> <span>&mdash; <code>$AMUX_SESSION</code> and <code>$AMUX_URL</code> injected at startup. A shared global memory file gives every agent the full REST API. Agents delegate work to each other in plain English.</span></div>
+    <div class="feat-item"><strong>Atomic task claiming</strong> <span>&mdash; <code>POST /api/board/:id/claim</code> is a SQLite CAS. Dozens of agents race for the same queue with no Redis, no duplicated work.</span></div>
+    <div class="feat-item"><strong>Mobile PWA</strong> <span>&mdash; installable on iOS and Android. Background Sync replays queued commands on reconnect. Manage your fleet from your phone.</span></div>
+    <div class="feat-item"><strong>Single Python file, zero build step</strong> <span>&mdash; server + full dashboard as inline HTML/CSS/JS. Edit it; it restarts via <code>os.execv</code> on save. Only deps: <code>python3</code> and <code>tmux</code>.</span></div>
+    <div class="feat-item"><strong>Status without hooks or patches</strong> <span>&mdash; parses ANSI-stripped tmux output to detect working / waiting / idle. No modifications to Claude Code.</span></div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- COMPARE -->
+<div class="section-wide reveal">
+  <div class="section-label">How it's different</div>
+  <div class="section-title">Not another Claude wrapper</div>
+  <div class="section-desc">Claude Code gives you one agent per terminal. amux gives you a fleet.</div>
   <div class="table-scroll">
-  <table class="cli-table">
+  <table class="diff-table">
     <thead>
-      <tr><th>Command</th><th>Alias</th><th>Description</th></tr>
+      <tr>
+        <th></th>
+        <th class="col-amux">amux</th>
+        <th>Claude Code</th>
+        <th>Other wrappers</th>
+      </tr>
     </thead>
     <tbody>
-      <tr><td class="cmd-cell">amux register &lt;n&gt; --dir &lt;path&gt;</td><td class="alias-cell">reg</td><td class="desc-cell">Register a new session</td></tr>
-      <tr><td class="cmd-cell">amux start &lt;n&gt;</td><td class="alias-cell"></td><td class="desc-cell">Start a session headless</td></tr>
-      <tr><td class="cmd-cell">amux stop &lt;n&gt;</td><td class="alias-cell">kill</td><td class="desc-cell">Stop a running session</td></tr>
-      <tr><td class="cmd-cell">amux attach &lt;n&gt;</td><td class="alias-cell">a</td><td class="desc-cell">Attach to a session's tmux pane</td></tr>
-      <tr><td class="cmd-cell">amux peek &lt;n&gt;</td><td class="alias-cell">p</td><td class="desc-cell">View output without attaching</td></tr>
-      <tr><td class="cmd-cell">amux send &lt;n&gt; &lt;text&gt;</td><td class="alias-cell"></td><td class="desc-cell">Send text or a command to a session</td></tr>
-      <tr><td class="cmd-cell">amux exec &lt;n&gt; -- &lt;prompt&gt;</td><td class="alias-cell">run</td><td class="desc-cell">Register + start + send in one shot</td></tr>
-      <tr><td class="cmd-cell">amux ls</td><td class="alias-cell">list</td><td class="desc-cell">List all sessions</td></tr>
-      <tr><td class="cmd-cell">amux serve</td><td class="alias-cell">web</td><td class="desc-cell">Start the web dashboard</td></tr>
-      <tr><td class="cmd-cell">amux start-all</td><td class="alias-cell"></td><td class="desc-cell">Start all registered sessions</td></tr>
-      <tr><td class="cmd-cell">amux defaults</td><td class="alias-cell">config</td><td class="desc-cell">Manage default flags</td></tr>
+      <tr><td class="row-label">Parallel agents</td><td class="has">Unlimited, isolated</td><td class="no">One per terminal</td><td class="partial">Limited or manual</td></tr>
+      <tr><td class="row-label">Self-healing</td><td class="has">Watchdog auto-compacts + replays</td><td class="no">Crashes on context overflow</td><td class="partial">Basic restart only</td></tr>
+      <tr><td class="row-label">Mobile management</td><td class="has">PWA with offline queue</td><td class="no">Terminal only</td><td class="no">Not available</td></tr>
+      <tr><td class="row-label">Agent coordination</td><td class="has">REST API + atomic task claiming</td><td class="no">None</td><td class="partial">Shared filesystem at best</td></tr>
+      <tr><td class="row-label">Setup</td><td class="has">git clone + ./install.sh, 0 deps</td><td class="has">pip install</td><td class="partial">Docker, config, API keys</td></tr>
     </tbody>
   </table>
   </div>
@@ -835,166 +789,12 @@ body { overflow-x: hidden; }
 
 <hr class="divider">
 
-<!-- API -->
-<div class="section-wide reveal" id="api">
-  <div class="section-label">REST API</div>
-  <div class="section-title">Every action is an endpoint</div>
-  <div class="section-desc">Automate orchestration with curl, scripts, or agents talking to agents.</div>
-  <div class="api-grid">
-    <div class="api-endpoints">
-      <div class="api-endpoint"><span class="api-method get">GET</span><span class="api-path">/api/sessions</span></div>
-      <div class="api-endpoint"><span class="api-method post">POST</span><span class="api-path">/api/sessions</span></div>
-      <div class="api-endpoint"><span class="api-method post">POST</span><span class="api-path">/api/sessions/&lt;n&gt;/start</span></div>
-      <div class="api-endpoint"><span class="api-method post">POST</span><span class="api-path">/api/sessions/&lt;n&gt;/stop</span></div>
-      <div class="api-endpoint"><span class="api-method post">POST</span><span class="api-path">/api/sessions/&lt;n&gt;/send</span></div>
-      <div class="api-endpoint"><span class="api-method get">GET</span><span class="api-path">/api/sessions/&lt;n&gt;/peek</span></div>
-      <div class="api-endpoint"><span class="api-method patch">PATCH</span><span class="api-path">/api/sessions/&lt;n&gt;/config</span></div>
-      <div class="api-endpoint"><span class="api-method post">POST</span><span class="api-path">/api/sessions/&lt;n&gt;/clone</span></div>
-      <div class="api-endpoint"><span class="api-method get">GET</span><span class="api-path">/api/board</span></div>
-      <div class="api-endpoint"><span class="api-method post">POST</span><span class="api-path">/api/board</span></div>
-      <div class="api-endpoint"><span class="api-method patch">PATCH</span><span class="api-path">/api/board/&lt;id&gt;</span></div>
-      <div class="api-endpoint"><span class="api-method delete">DEL</span><span class="api-path">/api/board/&lt;id&gt;</span></div>
-      <div class="api-endpoint"><span class="api-method get">GET</span><span class="api-path">/api/crm/contacts</span></div>
-      <div class="api-endpoint"><span class="api-method post">POST</span><span class="api-path">/api/crm/contacts</span></div>
-      <div class="api-endpoint"><span class="api-method patch">PATCH</span><span class="api-path">/api/crm/contacts/&lt;id&gt;</span></div>
-      <div class="api-endpoint"><span class="api-method post">POST</span><span class="api-path">/api/crm/contacts/&lt;id&gt;/interactions</span></div>
-      <div class="api-endpoint"><span class="api-method get">GET</span><span class="api-path">/api/crm/followups</span></div>
-      <div class="api-endpoint"><span class="api-method get">GET</span><span class="api-path">/api/events</span></div>
-      <div class="api-endpoint"><span class="api-method get">GET</span><span class="api-path">/api/stats/daily</span></div>
-    </div>
-    <div>
-      <div class="terminal-window" style="min-width:auto;">
-        <div class="terminal-bar">
-          <div class="terminal-dot r"></div>
-          <div class="terminal-dot y"></div>
-          <div class="terminal-dot g"></div>
-          <span class="terminal-bar-title">orchestration example</span>
-        </div>
-        <div class="terminal-body" style="font-size:0.72rem;">
-          <div><span class="comment"># Send a task to another session</span></div>
-          <div><span class="prompt">$</span> <span class="cmd">curl -sk -X POST \</span></div>
-          <div style="padding-left:1rem"><span class="flag">-H</span> <span class="cmd">'Content-Type: application/json' \</span></div>
-          <div style="padding-left:1rem"><span class="flag">-d</span> <span class="cmd">'{"text":"implement login"}' \</span></div>
-          <div style="padding-left:1rem"><span class="url">$AMUX_URL/api/sessions/worker-1/send</span></div>
-          <br>
-          <div><span class="comment"># Atomically claim a board item</span></div>
-          <div><span class="prompt">$</span> <span class="cmd">curl -sk -X POST \</span></div>
-          <div style="padding-left:1rem"><span class="url">$AMUX_URL/api/board/PROJ-5/claim</span></div>
-          <br>
-          <div><span class="comment"># Watch another session's output</span></div>
-          <div><span class="prompt">$</span> <span class="cmd">curl -sk</span> <span class="url">"$AMUX_URL/api/sessions/worker-1/peek?lines=50"</span></div>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<hr class="divider">
-
-<!-- ARCHITECTURE -->
-<div class="section reveal">
-  <div class="section-label">Architecture</div>
-  <div class="section-title">Single file. Zero dependencies.</div>
-  <div class="section-desc">Everything lives in <code style="color:var(--green)">amux-server.py</code>. Python's http.server with inline HTML/CSS/JS. No build step, no package manager.</div>
-  <div class="arch-visual">
-    <div class="arch-node"><div class="arch-node-label">CLI</div><div class="arch-node-sub">bash wrapper</div></div>
-    <div class="arch-arrow">-></div>
-    <div class="arch-node" style="border-color:var(--accent);border-width:2px;"><div class="arch-node-label">amux-server.py</div><div class="arch-node-sub">Python HTTP + SSE</div></div>
-    <div class="arch-arrow">-></div>
-    <div class="arch-node"><div class="arch-node-label">tmux</div><div class="arch-node-sub">session isolation</div></div>
-    <div class="arch-arrow">-></div>
-    <div class="arch-node"><div class="arch-node-label">Claude Code</div><div class="arch-node-sub">headless agents</div></div>
-  </div>
-  <div class="arch-details">
-    <div class="arch-details-item">
-      <div class="arch-details-label">State</div>
-      <div class="arch-details-val">Session .env files + SQLite DB + tmux processes</div>
-    </div>
-    <div class="arch-details-item">
-      <div class="arch-details-label">Offline</div>
-      <div class="arch-details-val">IndexedDB + localStorage + Service Worker cache</div>
-    </div>
-    <div class="arch-details-item">
-      <div class="arch-details-label">Security</div>
-      <div class="arch-details-val">Local-first. Tailscale or localhost only. No auth required.</div>
-    </div>
-  </div>
-</div>
-
-<hr class="divider">
-
-<!-- RESOURCES -->
-<div class="section-wide reveal">
-  <div class="section-label">Resources</div>
-  <div class="section-title">Explore further</div>
-  <div class="section-desc"></div>
-  <div class="resources-grid">
-    <div class="rg-group">
-      <div class="rg-group-label">Demos</div>
-      <ul>
-        <li><a href="/demos/session-cards-overview/">Session cards</a></li>
-        <li><a href="/demos/self-healing-watchdog/">Self-healing</a></li>
-        <li><a href="/demos/atomic-task-claiming/">Atomic claiming</a></li>
-        <li><a href="/demos/mobile-pwa/">Mobile PWA</a></li>
-        <li><a href="/demos/">All demos -></a></li>
-      </ul>
-    </div>
-    <div class="rg-group">
-      <div class="rg-group-label">Compare</div>
-      <ul>
-        <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
-        <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
-        <li><a href="/compare/amux-vs-aider/">vs Aider</a></li>
-        <li><a href="/compare/amux-vs-claude-code-agent-teams/">vs Agent Teams</a></li>
-        <li><a href="/compare/">All comparisons -></a></li>
-      </ul>
-    </div>
-    <div class="rg-group">
-      <div class="rg-group-label">Guides</div>
-      <ul>
-        <li><a href="/guides/getting-started/">Getting started</a></li>
-        <li><a href="/guides/running-10-plus-agents/">Run 10+ agents</a></li>
-        <li><a href="/guides/self-healing-configuration/">Self-healing config</a></li>
-        <li><a href="/guides/agent-to-agent-orchestration/">Orchestration</a></li>
-        <li><a href="/guides/">All guides -></a></li>
-      </ul>
-    </div>
-    <div class="rg-group">
-      <div class="rg-group-label">For your stack</div>
-      <ul>
-        <li><a href="/for/python-developers/">Python</a></li>
-        <li><a href="/for/typescript-developers/">TypeScript</a></li>
-        <li><a href="/for/react-developers/">React</a></li>
-        <li><a href="/for/go-developers/">Go</a></li>
-        <li><a href="/for/">All stacks -></a></li>
-      </ul>
-    </div>
-  </div>
-</div>
-
-<hr class="divider">
-
-<!-- CHANGELOG -->
-<div class="section reveal">
-  <div class="section-label">What's new</div>
-  <div class="section-title">Recent changes</div>
-  <div id="changelog-list" style="margin-top:1rem;">
-    <div id="cl-loading" style="color:var(--muted);font-size:0.78rem;">Loading...</div>
-  </div>
-  <div style="margin-top:0.75rem;">
-    <a href="/changelog/" style="font-size:0.75rem;color:var(--dim);text-decoration:none;">View full changelog -></a>
-  </div>
-</div>
-
 <!-- CLOUD WAITLIST -->
 <div id="cloud" class="waitlist-section reveal">
   <div class="waitlist-container">
-    <div class="waitlist-eyebrow">amux Cloud -- coming soon</div>
+    <div class="waitlist-eyebrow">amux Cloud &mdash; coming soon</div>
     <div class="waitlist-title">amux without the setup</div>
-    <div class="waitlist-desc">
-      Hosted amux -- persistent sessions, isolated environment, full feature parity.
-      Free tier available at launch.
-    </div>
+    <div class="waitlist-desc">Hosted amux &mdash; persistent sessions, isolated environment, full feature parity. Free tier available at launch.</div>
     <div class="waitlist-form" id="waitlist-form">
       <input class="waitlist-input" id="waitlist-email" type="email" placeholder="you@company.com" autocomplete="email">
       <button class="waitlist-btn" id="waitlist-btn" onclick="submitWaitlist()">join waitlist</button>
@@ -1002,27 +802,13 @@ body { overflow-x: hidden; }
     <div class="waitlist-success" id="waitlist-success">You're on the list. We'll reach out when early access opens.</div>
     <div class="waitlist-error" id="waitlist-error"></div>
     <div class="waitlist-note">No spam. Early access only.</div>
-    <div class="waitlist-features">
-      <div class="wf-item">
-        <div class="wf-label">Infrastructure</div>
-        <div class="wf-val">Fully managed</div>
-      </div>
-      <div class="wf-item">
-        <div class="wf-label">Access</div>
-        <div class="wf-val">Any device, anywhere</div>
-      </div>
-      <div class="wf-item">
-        <div class="wf-label">Sync</div>
-        <div class="wf-val">Persistent state across sessions</div>
-      </div>
-    </div>
   </div>
 </div>
 
 <!-- CTA -->
 <div class="cta-section">
   <div class="hero-ctas">
-    <a class="primary" href="https://github.com/mixpeek/amux#install">get started — it's free &amp; open source</a>
+    <a class="primary" href="https://github.com/mixpeek/amux#install">get started &mdash; it's free &amp; open source</a>
     <iframe src="https://ghbtns.com/github-btn.html?user=mixpeek&repo=amux&type=star&count=true&size=large" frameborder="0" scrolling="0" width="160" height="30" title="GitHub Stars" class="gh-iframe-hero"></iframe>
   </div>
   <p>Have questions? <a href="https://github.com/mixpeek/amux/issues">Open an issue</a> or email <a href="mailto:founders@mixpeek.com">founders@mixpeek.com</a></p>
@@ -1052,8 +838,8 @@ body { overflow-x: hidden; }
           <li><a href="/guides/">Guides</a></li>
           <li><a href="/blog/">Blog</a></li>
           <li><a href="/demos/">Demos</a></li>
-          <li><a href="/glossary/">Glossary</a></li>
           <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/changelog/">Changelog</a></li>
         </ul>
       </div>
       <div class="footer-col">
@@ -1061,8 +847,8 @@ body { overflow-x: hidden; }
         <ul>
           <li><a href="/compare/amux-vs-cursor/">vs Cursor</a></li>
           <li><a href="/compare/amux-vs-devin/">vs Devin</a></li>
-          <li><a href="/compare/amux-vs-cline/">vs Cline</a></li>
-          <li><a href="/compare/amux-vs-codex/">vs Codex</a></li>
+          <li><a href="/compare/amux-vs-aider/">vs Aider</a></li>
+          <li><a href="/compare/amux-vs-claude-code-agent-teams/">vs Agent Teams</a></li>
           <li><a href="/compare/">All comparisons</a></li>
         </ul>
       </div>
@@ -1072,17 +858,17 @@ body { overflow-x: hidden; }
           <li><a href="/use-cases/">Use Cases</a></li>
           <li><a href="/solutions/">Solutions</a></li>
           <li><a href="/for/">For your stack</a></li>
-          <li><a href="/changelog/">Changelog</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
           <li><a href="/release-notes/">Release Notes</a></li>
         </ul>
       </div>
     </div>
     <div class="footer-bottom">
-      <span>MIT License. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
+      <span>MIT + Commons Clause. Built by <a href="https://mixpeek.com">Mixpeek</a></span>
       <div class="footer-bottom-links">
         <a href="https://github.com/mixpeek/amux" target="_blank" rel="noopener">GitHub</a>
         <a href="https://github.com/mixpeek/amux/issues">Issues</a>
-        <a href="https://github.com/mixpeek/amux/blob/main/README.md">Docs</a>
+        <a href="/guides/">Docs</a>
         <a href="/privacy/">Privacy</a>
       </div>
     </div>
@@ -1148,7 +934,7 @@ document.getElementById('demo-btn').addEventListener('click', function() {
 function closeLightbox() { lb.classList.remove('open'); vid.pause(); }
 document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeLightbox(); });
 
-// Cloud waitlist (Formspree)
+// Cloud waitlist
 document.getElementById('waitlist-email').addEventListener('keydown', function(e) {
   if (e.key === 'Enter') submitWaitlist();
 });
@@ -1184,26 +970,6 @@ function submitWaitlist() {
     });
 }
 
-// Changelog
-(function() {
-  var container = document.getElementById('changelog-list');
-  fetch('/changelog/notes.json?v=' + Date.now())
-    .then(function(r) { return r.json(); })
-    .then(function(entries) {
-      var recent = entries.slice(0, 5);
-      if (!recent.length) { container.innerHTML = '<div style="color:var(--muted);font-size:0.78rem;">No entries yet.</div>'; return; }
-      container.innerHTML = recent.map(function(e) {
-        var type = (e.type || 'chore').toLowerCase();
-        return '<div class="cl-entry">' +
-          '<span class="cl-badge cl-' + type + '">' + type + '</span>' +
-          '<span class="cl-title" title="' + e.title.replace(/"/g,'&quot;') + '">' + e.title + '</span>' +
-          '<span class="cl-date">' + (e.date || '') + '</span>' +
-        '</div>';
-      }).join('');
-    })
-    .catch(function() { container.innerHTML = ''; });
-})();
-
 // Theme toggle
 document.getElementById('theme-toggle').addEventListener('click', function() {
   var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
@@ -1215,87 +981,6 @@ document.getElementById('theme-toggle').addEventListener('click', function() {
     localStorage.setItem('theme', 'dark');
   }
 });
-</script>
-</body>
-</html>
-mentById(id);
-      if (el) { el.textContent = '★ ' + label; el.style.display = ''; }
-    });
-  }
-
-  var cached = localStorage.getItem(CACHE_KEY);
-  var ts = parseInt(localStorage.getItem(CACHE_TS) || '0', 10);
-  if (cached && Date.now() - ts < TTL) { setStars(parseInt(cached, 10)); return; }
-
-  fetch('https://api.github.com/repos/mixpeek/amux')
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
-      var s = d.stargazers_count || 0;
-      localStorage.setItem(CACHE_KEY, String(s));
-      localStorage.setItem(CACHE_TS, String(Date.now()));
-      setStars(s);
-    })
-    .catch(function() {});
-})();
-</script>
-</body>
-</html>
-entById(id);
-      if (el) { el.textContent = '★ ' + label; el.style.display = ''; }
-    });
-  }
-
-  var cached = localStorage.getItem(CACHE_KEY);
-  var ts = parseInt(localStorage.getItem(CACHE_TS) || '0', 10);
-  if (cached && Date.now() - ts < TTL) { setStars(parseInt(cached, 10)); return; }
-
-  fetch('https://api.github.com/repos/mixpeek/amux')
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
-      var s = d.stargazers_count || 0;
-      localStorage.setItem(CACHE_KEY, String(s));
-      localStorage.setItem(CACHE_TS, String(Date.now()));
-      setStars(s);
-    })
-    .catch(function() {});
-})();
-</script>
-</body>
-</html>
-s(parseInt(cached, 10)); return; }
-
-  fetch('https://api.github.com/repos/mixpeek/amux')
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
-      var s = d.stargazers_count || 0;
-      localStorage.setItem(CACHE_KEY, String(s));
-      localStorage.setItem(CACHE_TS, String(Date.now()));
-      setStars(s);
-    })
-    .catch(function() {});
-})();
-</script>
-</body>
-</html>
-entById(id);
-      if (el) { el.textContent = '★ ' + label; el.style.display = ''; }
-    });
-  }
-
-  var cached = localStorage.getItem(CACHE_KEY);
-  var ts = parseInt(localStorage.getItem(CACHE_TS) || '0', 10);
-  if (cached && Date.now() - ts < TTL) { setStars(parseInt(cached, 10)); return; }
-
-  fetch('https://api.github.com/repos/mixpeek/amux')
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
-      var s = d.stargazers_count || 0;
-      localStorage.setItem(CACHE_KEY, String(s));
-      localStorage.setItem(CACHE_TS, String(Date.now()));
-      setStars(s);
-    })
-    .catch(function() {});
-})();
 </script>
 </body>
 </html>
