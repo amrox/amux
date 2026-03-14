@@ -99,6 +99,99 @@ def slog(*args):
     except Exception:
         pass
 
+# ── Torrent (aria2c RPC) helpers ──────────────────────────────────────────────
+_ARIA2_RPC_PORT = 6800
+_ARIA2_RPC_SECRET = "amux"
+_ARIA2_DOWNLOAD_DIR = str(Path.home() / "Downloads" / "amux-torrents")
+_aria2_proc = None
+
+def _aria2_ensure():
+    """Start aria2c daemon if not running."""
+    global _aria2_proc
+    if _aria2_proc and _aria2_proc.poll() is None:
+        return True
+    # Check if already running
+    try:
+        r = _aria2_rpc("aria2.getVersion")
+        if r: return True
+    except Exception:
+        pass
+    aria2 = shutil.which("aria2c")
+    if not aria2:
+        return False
+    os.makedirs(_ARIA2_DOWNLOAD_DIR, exist_ok=True)
+    _aria2_proc = subprocess.Popen([
+        aria2, "--enable-rpc", "--rpc-listen-port", str(_ARIA2_RPC_PORT),
+        "--rpc-secret", _ARIA2_RPC_SECRET,
+        "--dir", _ARIA2_DOWNLOAD_DIR,
+        "--seed-time=0",  # don't seed after download
+        "--bt-enable-lpd=true",
+        "--enable-dht=true",
+        "--enable-peer-exchange=true",
+        "--max-concurrent-downloads=5",
+        "--file-allocation=none",
+        "--daemon=false",
+        "--quiet=true",
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(0.5)
+    return _aria2_proc.poll() is None
+
+def _aria2_rpc(method, params=None):
+    """Call aria2 JSON-RPC."""
+    payload = {
+        "jsonrpc": "2.0",
+        "id": "amux",
+        "method": method,
+        "params": [f"token:{_ARIA2_RPC_SECRET}"] + (params or [])
+    }
+    import urllib.request
+    req = urllib.request.Request(
+        f"http://localhost:{_ARIA2_RPC_PORT}/jsonrpc",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        return json.loads(resp.read()).get("result")
+
+def _aria2_list_all():
+    """Get all torrents (active + waiting + stopped)."""
+    torrents = []
+    for method in ("aria2.tellActive", "aria2.tellWaiting", "aria2.tellStopped"):
+        try:
+            params = [0, 100] if method != "aria2.tellActive" else []
+            items = _aria2_rpc(method, params) or []
+            torrents.extend(items)
+        except Exception:
+            pass
+    result = []
+    for t in torrents:
+        gid = t.get("gid", "")
+        total = int(t.get("totalLength", 0))
+        completed = int(t.get("completedLength", 0))
+        speed = int(t.get("downloadSpeed", 0))
+        status = t.get("status", "unknown")
+        bt = t.get("bittorrent", {})
+        name = ""
+        if bt.get("info"):
+            name = bt["info"].get("name", "")
+        if not name and t.get("files"):
+            name = t["files"][0].get("path", "").split("/")[-1]
+        files = []
+        for f in t.get("files", []):
+            fp = f.get("path", "")
+            if not fp:
+                continue
+            fsize = int(f.get("length", 0))
+            fcomplete = int(f.get("completedLength", 0)) >= fsize and fsize > 0
+            files.append({"path": fp, "size": fsize, "complete": fcomplete})
+        result.append({
+            "gid": gid, "name": name, "status": status,
+            "total": total, "completed": completed, "speed": speed,
+            "files": files,
+        })
+    return result
+
+
 # ── Browser automation helpers ────────────────────────────────────────────────
 _BROWSER_HELPER = Path.home() / ".amux" / "browser-helper.js"
 _NODE_BIN = shutil.which("node") or "/usr/local/bin/node"
@@ -7426,6 +7519,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <button id="tab-crm" onclick="switchView('crm')">People</button>
   <button id="tab-map" onclick="switchView('map')">Map</button>
   <button id="tab-metrics" onclick="switchView('metrics')">Metrics</button>
+  <button id="tab-torrents" onclick="switchView('torrents')">Torrents</button>
 </div>
 <div class="tab-customize-wrap">
   <button class="tab-customize-btn" onclick="event.stopPropagation();toggleTabCustomizer()" title="Show/hide tabs">&#x229E;</button>
@@ -7910,6 +8004,34 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <div class="metrics-main" id="metrics-main">
     <button class="metrics-expand-btn" onclick="_metricsToggleSidebar()" title="Show sessions list"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m14 9 3 3-3 3"/></svg></button>
     <div id="metrics-content"><div style="color:var(--dim);font-size:0.85rem;padding:40px;text-align:center;">Loading metrics&hellip;</div></div>
+  </div>
+</div>
+
+<!-- Torrents view -->
+<div id="torrents-view" style="display:none;flex-direction:column;gap:12px;padding:0;">
+  <div style="display:flex;align-items:center;gap:8px;padding:0 0 4px 0;flex-wrap:wrap;">
+    <input id="torrent-magnet" type="text" placeholder="Paste magnet link or torrent URL…" style="flex:1;min-width:200px;font-size:0.85rem;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;" autocomplete="off">
+    <button onclick="_torrentAdd()" style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:0.85rem;cursor:pointer;white-space:nowrap;">Add torrent</button>
+    <button onclick="_torrentShowSettings()" style="padding:8px 12px;background:var(--surface);color:var(--dim);border:1px solid var(--border);border-radius:6px;font-size:0.85rem;cursor:pointer;" title="Settings">&#x2699;</button>
+  </div>
+  <div id="torrent-settings" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
+    <div style="display:flex;align-items:center;gap:8px;">
+      <label style="font-size:0.8rem;color:var(--dim);white-space:nowrap;">Download to:</label>
+      <input id="torrent-dir" type="text" style="flex:1;font-size:0.82rem;padding:6px 10px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'JetBrains Mono',monospace;" autocomplete="off">
+      <button onclick="_torrentSaveDir()" style="padding:6px 12px;background:var(--accent);color:#fff;border:none;border-radius:4px;font-size:0.8rem;cursor:pointer;">Save</button>
+    </div>
+  </div>
+  <div id="torrent-list" style="display:flex;flex-direction:column;gap:6px;overflow-y:auto;flex:1;"></div>
+  <div id="torrent-empty" style="color:var(--dim);font-size:0.85rem;text-align:center;padding:40px;">No torrents. Paste a magnet link above to start downloading.</div>
+</div>
+
+<!-- Video player overlay -->
+<div id="video-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:none;align-items:center;justify-content:center;flex-direction:column;" onclick="if(event.target===this)_closeVideo()">
+  <div style="position:relative;max-width:90vw;max-height:85vh;">
+    <video id="video-player" controls playsinline x-webkit-airplay="allow" airplay="allow" style="max-width:90vw;max-height:80vh;border-radius:8px;background:#000;"></video>
+    <div style="display:flex;gap:8px;margin-top:8px;justify-content:center;">
+      <button onclick="_closeVideo()" style="padding:6px 16px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:0.8rem;cursor:pointer;">Close</button>
+    </div>
   </div>
 </div>
 
@@ -9432,7 +9554,6 @@ function render() {
     const timeStr = age < 1 ? 'just now' : age + 'm ago';
     return `<div class="card" style="border-color:var(--yellow);opacity:${d.syncing?'0.6':'1'}">
       <div class="card-header">
-        <div class="dot stopped" style="background:var(--yellow)"></div>
         <div class="card-name">${esc(d.name)}</div>
         <span class="draft-badge">${d.syncing ? 'syncing' : 'draft'}</span>
         <span class="last-active">${timeStr}</span>
@@ -9481,7 +9602,6 @@ function render() {
       <div class="card-header" onclick="headerTap('${s.name}', event)" onmousedown="tileMouseDown(event,'${s.name}')">
         <div class="card-header-top">
           <div class="card-drag-handle" title="Drag to reorder"><svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor"><circle cx="3" cy="3" r="1.3"/><circle cx="7" cy="3" r="1.3"/><circle cx="3" cy="8" r="1.3"/><circle cx="7" cy="8" r="1.3"/><circle cx="3" cy="13" r="1.3"/><circle cx="7" cy="13" r="1.3"/></svg></div>
-          <div class="dot ${s.running ? 'running' : 'stopped'}"></div>
           <div class="card-name">${s.pinned ? '<span class="pin-icon">&#x1F4CC;</span> ' : ''}${esc(s.name)}</div>
           <button class="card-menu-btn" onclick="event.stopPropagation();toggleMenu('${s.name}')" title="Options">&#x22EF;</button>
           <div class="card-menu" id="menu-${s.name}">
@@ -9922,6 +10042,7 @@ const ALL_TABS = [
   { id: 'crm',           label: 'People' },
   { id: 'map',           label: 'Map' },
   { id: 'metrics',       label: 'Metrics' },
+  { id: 'torrents',      label: 'Torrents' },
 ];
 
 let hiddenTabs = (function() {
@@ -9930,7 +10051,7 @@ let hiddenTabs = (function() {
     if (s !== null) return new Set(JSON.parse(s));
   } catch(e) {}
   // Default visible tabs: sessions, files, scheduler, board, workspace, notes
-  return new Set(['calendar','reports','notifications','logs','browser','email','metrics','crm']);
+  return new Set(['calendar','reports','notifications','logs','browser','email','metrics','crm','torrents']);
 })();
 
 let tabOrder = (function() {
@@ -14107,6 +14228,7 @@ function switchView(view) {
   document.getElementById('crm-view').style.display = view === 'crm' ? 'flex' : 'none';
   document.getElementById('map-view').style.display = view === 'map' ? 'flex' : 'none';
   document.getElementById('metrics-view').style.display = view === 'metrics' ? 'flex' : 'none';
+  document.getElementById('torrents-view').style.display = view === 'torrents' ? 'flex' : 'none';
   document.getElementById('tab-sessions').classList.toggle('active', view === 'sessions');
   document.getElementById('tab-board').classList.toggle('active', view === 'board');
   document.getElementById('tab-scheduler').classList.toggle('active', view === 'scheduler');
@@ -14117,6 +14239,8 @@ function switchView(view) {
   document.getElementById('tab-crm').classList.toggle('active', view === 'crm');
   document.getElementById('tab-map').classList.toggle('active', view === 'map');
   document.getElementById('tab-metrics').classList.toggle('active', view === 'metrics');
+  document.getElementById('tab-torrents').classList.toggle('active', view === 'torrents');
+  if (view === 'torrents') _torrentLoad();
   if (view === 'crm') { _crmDirty = false; _crmLoad(); _crmApplySidebarState(); } // always refresh on tab switch
   if (view === 'map') { _mapLoad(); _mapInit(); }
   if (view === 'metrics') { _metricsLoad(); _metricsApplySidebarState(); } // always refresh on tab switch
@@ -18346,6 +18470,133 @@ function _metricsSelectSession(name) {
   _metricsRender();
 }
 
+// ── Torrents tab ─────────────────────────────────────────────────────────────
+let _torrents = [];
+let _torrentTimer = null;
+
+async function _torrentLoad() {
+  try {
+    const r = await fetch(API + '/api/torrents');
+    _torrents = await r.json();
+    _torrentRender();
+  } catch(e) { console.error('torrent load', e); }
+  if (!_torrentTimer) _torrentTimer = setInterval(_torrentLoad, 3000);
+}
+
+function _torrentStopTimer() {
+  if (_torrentTimer) { clearInterval(_torrentTimer); _torrentTimer = null; }
+}
+
+async function _torrentAdd() {
+  const inp = document.getElementById('torrent-magnet');
+  const uri = inp.value.trim();
+  if (!uri) return;
+  inp.value = '';
+  await fetch(API + '/api/torrents', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({uri}) });
+  _torrentLoad();
+}
+
+async function _torrentRemove(gid) {
+  await fetch(API + '/api/torrents/' + gid, { method: 'DELETE' });
+  _torrentLoad();
+}
+
+async function _torrentAction(gid, action) {
+  await fetch(API + '/api/torrents/' + gid + '/' + action, { method: 'POST' });
+  _torrentLoad();
+}
+
+function _torrentShowSettings() {
+  const el = document.getElementById('torrent-settings');
+  const isHidden = el.style.display === 'none';
+  el.style.display = isHidden ? '' : 'none';
+  if (isHidden) {
+    fetch(API + '/api/torrents/config').then(r => r.json()).then(d => {
+      document.getElementById('torrent-dir').value = d.download_dir || '';
+    });
+  }
+}
+
+async function _torrentSaveDir() {
+  const dir = document.getElementById('torrent-dir').value.trim();
+  if (!dir) return;
+  await fetch(API + '/api/torrents/config', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({download_dir: dir}) });
+  document.getElementById('torrent-settings').style.display = 'none';
+}
+
+function _torrentRender() {
+  const list = document.getElementById('torrent-list');
+  const empty = document.getElementById('torrent-empty');
+  if (!_torrents.length) { list.innerHTML = ''; empty.style.display = ''; return; }
+  empty.style.display = 'none';
+  list.innerHTML = _torrents.map(t => {
+    const pct = t.total > 0 ? Math.round(t.completed / t.total * 100) : 0;
+    const speed = t.speed > 0 ? _fmtBytes(t.speed) + '/s' : '';
+    const size = t.total > 0 ? _fmtBytes(t.completed) + ' / ' + _fmtBytes(t.total) : '';
+    const statusCls = t.status === 'complete' ? 'color:var(--green)' : t.status === 'error' ? 'color:var(--red)' : t.status === 'paused' ? 'color:var(--yellow)' : '';
+    // Control buttons based on status
+    const isActive = t.status === 'active';
+    const isPaused = t.status === 'paused' || t.status === 'waiting';
+    const isDone = t.status === 'complete';
+    const ctrlBtns = isDone
+      ? `<button onclick="_torrentRemove('${t.gid}')" style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:0.78rem;" title="Remove">&#x2716;</button>`
+      : `${isActive ? `<button onclick="_torrentAction('${t.gid}','pause')" style="background:none;border:none;color:var(--yellow);cursor:pointer;font-size:0.85rem;" title="Pause">&#x23F8;</button>` : ''}
+         ${isPaused ? `<button onclick="_torrentAction('${t.gid}','resume')" style="background:none;border:none;color:var(--green);cursor:pointer;font-size:0.85rem;" title="Resume">&#x25B6;</button>` : ''}
+         <button onclick="_torrentAction('${t.gid}','remove')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:0.85rem;" title="Stop &amp; remove">&#x23F9;</button>`;
+    return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        <strong style="flex:1;font-size:0.85rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t.name || t.gid)}</strong>
+        <span style="font-size:0.75rem;${statusCls}">${esc(t.status)}</span>
+        ${speed ? `<span style="font-size:0.75rem;color:var(--accent);">${speed}</span>` : ''}
+        ${ctrlBtns}
+      </div>
+      <div style="height:4px;background:var(--border);border-radius:2px;overflow:hidden;">
+        <div style="height:100%;width:${pct}%;background:${isPaused ? 'var(--yellow)' : 'var(--accent)'};border-radius:2px;transition:width 0.3s;"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:4px;font-size:0.75rem;color:var(--dim);">
+        <span>${size}</span><span>${pct}%</span>
+      </div>
+      ${t.files && t.files.length ? `<div style="margin-top:6px;font-size:0.78rem;">
+        ${t.files.map(f => {
+          const isVideo = /\.(mp4|mkv|avi|mov|webm|m4v)$/i.test(f.path);
+          const fname = f.path.split('/').pop();
+          return `<div style="display:flex;align-items:center;gap:6px;padding:2px 0;">
+            <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);">${esc(fname)}</span>
+            <span style="color:var(--dim);font-size:0.72rem;">${_fmtBytes(f.size)}</span>
+            ${f.complete && isVideo ? `<button onclick="_playVideo('${t.gid}','${encodeURIComponent(f.path)}')" style="background:var(--accent);color:#fff;border:none;border-radius:4px;padding:2px 8px;font-size:0.72rem;cursor:pointer;">&#9654; Play</button>` : ''}
+            ${f.complete ? `<a href="${API}/api/torrents/${t.gid}/file?path=${encodeURIComponent(f.path)}" download style="color:var(--accent);font-size:0.72rem;text-decoration:none;">Download</a>` : ''}
+          </div>`;
+        }).join('')}
+      </div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function _fmtBytes(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+  if (b < 1073741824) return (b/1048576).toFixed(1) + ' MB';
+  return (b/1073741824).toFixed(2) + ' GB';
+}
+
+function _playVideo(gid, encodedPath) {
+  const url = API + '/api/torrents/' + gid + '/file?path=' + encodedPath;
+  const v = document.getElementById('video-player');
+  v.src = url;
+  document.getElementById('video-overlay').style.display = 'flex';
+  v.play().catch(() => {});
+}
+
+function _closeVideo() {
+  const v = document.getElementById('video-player');
+  v.pause();
+  v.src = '';
+  document.getElementById('video-overlay').style.display = 'none';
+}
+
+// Enter key in magnet input
+document.getElementById('torrent-magnet').addEventListener('keydown', e => { if (e.key === 'Enter') _torrentAdd(); });
+
 // ── Notes tab ─────────────────────────────────────────────────────────────────
 let _notesActive = null; // { path, title }
 let _notesTrashOpen = false;
@@ -20015,6 +20266,155 @@ class CCHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "SAMEORIGIN")
+
+    def _handle_torrents(self, method, path, qs):
+        """Handle /api/torrents/* routes."""
+        global _ARIA2_DOWNLOAD_DIR
+        if not _aria2_ensure():
+            return self._json({"error": "aria2c not installed or failed to start. Install with: brew install aria2"}, 500)
+
+        # GET /api/torrents — list all
+        if method == "GET" and path == "/api/torrents":
+            return self._json(_aria2_list_all())
+
+        # POST /api/torrents — add magnet/URL or .torrent file path
+        if method == "POST" and path == "/api/torrents":
+            body = self._read_body()
+            uri = body.get("uri", "").strip()
+            torrent_path = body.get("file", "").strip()
+            if not uri and not torrent_path:
+                return self._json({"error": "uri or file required"}, 400)
+            try:
+                if torrent_path and os.path.isfile(torrent_path):
+                    import base64
+                    with open(torrent_path, "rb") as tf:
+                        b64 = base64.b64encode(tf.read()).decode()
+                    gid = _aria2_rpc("aria2.addTorrent", [b64])
+                elif uri.startswith("magnet:"):
+                    gid = _aria2_rpc("aria2.addUri", [[uri]])
+                else:
+                    gid = _aria2_rpc("aria2.addUri", [[uri]])
+                return self._json({"gid": gid})
+            except Exception as e:
+                return self._json({"error": str(e)}, 500)
+
+        # POST /api/torrents/<gid>/pause — pause download
+        m_action = re.match(r"^/api/torrents/([a-f0-9]+)/(pause|resume|remove)$", path)
+        if m_action and method == "POST":
+            gid = m_action.group(1)
+            action = m_action.group(2)
+            try:
+                if action == "pause":
+                    _aria2_rpc("aria2.forcePause", [gid])
+                elif action == "resume":
+                    _aria2_rpc("aria2.unpause", [gid])
+                elif action == "remove":
+                    try:
+                        _aria2_rpc("aria2.forceRemove", [gid])
+                    except Exception:
+                        _aria2_rpc("aria2.removeDownloadResult", [gid])
+                return self._json({"ok": True})
+            except Exception as e:
+                return self._json({"error": str(e)}, 500)
+
+        # DELETE /api/torrents/<gid> — remove
+        m = re.match(r"^/api/torrents/([a-f0-9]+)$", path)
+        if m and method == "DELETE":
+            gid = m.group(1)
+            try:
+                _aria2_rpc("aria2.forceRemove", [gid])
+            except Exception:
+                try:
+                    _aria2_rpc("aria2.removeDownloadResult", [gid])
+                except Exception:
+                    pass
+            return self._json({"ok": True})
+
+        # GET /api/torrents/config — get download dir
+        if method == "GET" and path == "/api/torrents/config":
+            return self._json({"download_dir": _ARIA2_DOWNLOAD_DIR})
+
+        # POST /api/torrents/config — set download dir
+        if method == "POST" and path == "/api/torrents/config":
+            body = self._read_body()
+            new_dir = body.get("download_dir", "").strip()
+            if not new_dir:
+                return self._json({"error": "download_dir required"}, 400)
+            expanded = os.path.expanduser(new_dir)
+            os.makedirs(expanded, exist_ok=True)
+            _ARIA2_DOWNLOAD_DIR = expanded
+            # Update aria2 global option
+            try:
+                _aria2_rpc("aria2.changeGlobalOption", [{"dir": expanded}])
+            except Exception:
+                pass
+            return self._json({"download_dir": expanded})
+
+        # GET /api/torrents/<gid>/file?path=... — serve a downloaded file
+        m2 = re.match(r"^/api/torrents/([a-f0-9]+)/file$", path)
+        if m2 and method == "GET":
+            file_path = qs.get("path", [""])[0] if isinstance(qs.get("path"), list) else qs.get("path", "")
+            if not file_path:
+                return self._json({"error": "path required"}, 400)
+            # Security: ensure file is within download dir
+            real = os.path.realpath(file_path)
+            if not real.startswith(os.path.realpath(_ARIA2_DOWNLOAD_DIR)):
+                return self._json({"error": "forbidden"}, 403)
+            if not os.path.isfile(real):
+                return self._json({"error": "file not found"}, 404)
+            # Determine content type
+            ext = os.path.splitext(real)[1].lower()
+            ct_map = {
+                ".mp4": "video/mp4", ".mkv": "video/x-matroska", ".avi": "video/x-msvideo",
+                ".mov": "video/quicktime", ".webm": "video/webm", ".m4v": "video/mp4",
+                ".mp3": "audio/mpeg", ".flac": "audio/flac", ".zip": "application/zip",
+                ".pdf": "application/pdf",
+            }
+            ct = ct_map.get(ext, "application/octet-stream")
+            fsize = os.path.getsize(real)
+            # Support range requests for video streaming
+            range_hdr = self.headers.get("Range")
+            if range_hdr:
+                m_range = re.match(r"bytes=(\d+)-(\d*)", range_hdr)
+                if m_range:
+                    start = int(m_range.group(1))
+                    end = int(m_range.group(2)) if m_range.group(2) else fsize - 1
+                    end = min(end, fsize - 1)
+                    length = end - start + 1
+                    self.send_response(206)
+                    self._cors()
+                    self.send_header("Content-Type", ct)
+                    self.send_header("Content-Range", f"bytes {start}-{end}/{fsize}")
+                    self.send_header("Content-Length", str(length))
+                    self.send_header("Accept-Ranges", "bytes")
+                    self.end_headers()
+                    with open(real, "rb") as fp:
+                        fp.seek(start)
+                        remaining = length
+                        while remaining > 0:
+                            chunk = fp.read(min(65536, remaining))
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                            remaining -= len(chunk)
+                    return
+            self.send_response(200)
+            self._cors()
+            self.send_header("Content-Type", ct)
+            self.send_header("Content-Length", str(fsize))
+            self.send_header("Accept-Ranges", "bytes")
+            fname = os.path.basename(real)
+            self.send_header("Content-Disposition", f'inline; filename="{fname}"')
+            self.end_headers()
+            with open(real, "rb") as fp:
+                while True:
+                    chunk = fp.read(65536)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+            return
+
+        return self._json({"error": "torrent route not found"}, 404)
 
     def _json(self, data, status=200):
         body = json.dumps(data).encode()
@@ -22669,6 +23069,10 @@ p{{color:#888;margin:12px 0 28px;font-size:0.9rem;line-height:1.5}}
                 return self._json(_browser_call({"cmd": "screenshot", "profile": prof, "url": url_param or None}))
 
             return self._json({"error": "browser route not found"}, 404)
+
+        # ── Torrents (/api/torrents/*) ────────────────────────────────────────
+        if path.startswith("/api/torrents"):
+            return self._handle_torrents(method, path, qs)
 
         # Session-specific routes: /api/sessions/<name>/<action>[/<subid>]
         m = re.match(r"^/api/sessions/([^/]+)(/([^/]+)(/([^/]+))?)?$", path)
