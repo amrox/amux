@@ -15,6 +15,174 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/style.css">
+<style>
+.rn-header {
+  text-align: center;
+  padding: 2rem 1.5rem 1.5rem;
+  max-width: 640px;
+  margin: 0 auto;
+}
+.rn-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  font-family: var(--sans);
+}
+.rn-logo-mark {
+  width: 28px; height: 28px;
+  background: var(--accent);
+  color: var(--bg);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+.rn-logo-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+}
+.rn-logo-sep {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.rn-logo-sub {
+  font-size: 0.9rem;
+  color: var(--dim);
+}
+.rn-title {
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  margin-bottom: 0.4rem;
+}
+.rn-subtitle {
+  font-size: 0.95rem;
+  color: var(--dim);
+}
+.rn-content {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0 1.5rem 4rem;
+}
+.rn-spinner {
+  text-align: center;
+  padding: 3rem 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.rn-empty {
+  text-align: center;
+  padding: 3rem 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.rn-entry {
+  border-top: 1px solid var(--border);
+  padding: 1.5rem 0;
+}
+.rn-entry:first-child {
+  border-top: none;
+}
+.rn-entry-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+.rn-date {
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+.rn-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-family: var(--sans);
+}
+.rn-badge-feat {
+  background: var(--green-glow);
+  color: var(--green);
+}
+.rn-badge-fix {
+  background: rgba(37,99,235,0.08);
+  color: var(--blue);
+}
+.rn-badge-chore {
+  background: var(--surface);
+  color: var(--dim);
+}
+.rn-tag {
+  font-size: 0.72rem;
+  color: var(--dim);
+  background: var(--surface);
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  font-family: var(--sans);
+}
+.rn-commit {
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-family: var(--mono);
+  text-decoration: none;
+  margin-left: auto;
+}
+.rn-commit:hover {
+  color: var(--dim);
+}
+.rn-entry-title {
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin-bottom: 0.4rem;
+  line-height: 1.4;
+}
+.rn-entry-desc {
+  font-size: 0.9rem;
+  color: var(--dim);
+  line-height: 1.7;
+  margin-bottom: 1rem;
+}
+.rn-video-wrap {
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  margin-top: 0.75rem;
+}
+.rn-video-wrap video {
+  width: 100%;
+  display: block;
+}
+.rn-video-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 2rem;
+  background: var(--surface);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin-top: 0.75rem;
+}
+.rn-video-placeholder svg {
+  opacity: 0.4;
+}
+@media (max-width: 640px) {
+  .rn-commit { display: none; }
+  .rn-entry-title { font-size: 1rem; }
+}
+</style>
 </head>
 <body>
 <header class="site-header">
