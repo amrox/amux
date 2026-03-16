@@ -220,9 +220,7 @@ function typeBadge(type) {
 
 function renderEntry(n) {
   var tags = (n.tags || []).map(function(t) { return '<span class="rn-tag">' + t + '</span>'; }).join('');
-  var video = n.video
-    ? '<div class="rn-video-wrap"><video controls preload="none"><source src="' + GH_RAW + n.video + '" type="video/mp4"></video></div>'
-    : '<div class="rn-video-placeholder"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="5 3 19 12 5 21 5 3"/></svg><span>Video coming soon</span></div>';
+  var video = '';
   return '<article class="rn-entry">' +
     '<div class="rn-entry-meta">' +
       '<span class="rn-date">' + (n.date || '') + '</span>' +
