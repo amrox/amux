@@ -23,6 +23,44 @@ struct ServerPickerView: View {
                 }
                 .padding(.bottom, 36)
 
+                // Cloud option
+                VStack(spacing: 12) {
+                    Button(action: {
+                        if serverManager.addServer(name: "amux cloud", urlString: "https://cloud.amux.io") {
+                            serverManager.selectServer("https://cloud.amux.io")
+                        }
+                    }) {
+                        HStack {
+                            Image(systemName: "cloud.fill")
+                            Text("Sign in to amux cloud")
+                                .font(.headline)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(14)
+                        .background(Color.accentColor)
+                        .foregroundColor(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+
+                    Text("Includes Sign in with Apple")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 24)
+
+                // Divider
+                HStack {
+                    Rectangle().frame(height: 1).foregroundStyle(.quaternary)
+                    Text("or self-hosted")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .layoutPriority(1)
+                    Rectangle().frame(height: 1).foregroundStyle(.quaternary)
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 24)
+
                 // Server URL form
                 VStack(spacing: 16) {
                     VStack(alignment: .leading, spacing: 8) {
@@ -64,8 +102,8 @@ struct ServerPickerView: View {
                             .font(.headline)
                             .frame(maxWidth: .infinity)
                             .padding(14)
-                            .background(Color.accentColor)
-                            .foregroundColor(.white)
+                            .background(Color(uiColor: .secondarySystemGroupedBackground))
+                            .foregroundColor(.primary)
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
                     .disabled(customURL.isEmpty)
