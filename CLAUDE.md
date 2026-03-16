@@ -57,6 +57,18 @@ The feed auto-uploads to S3 on every board write (POST/PATCH/DELETE). The dashbo
 
 ## Browser Automation
 
-Always use the `claude-in-chrome` MCP server for browser tasks (tools: `mcp__claude-in-chrome__*`). Do not use Playwright or any other browser MCP unless explicitly asked. claude-in-chrome connects directly to the user's Chrome browser and preserves session state across navigations.
+Use `/chrome-cdp` for browser tasks. It connects directly to the user's live Chrome via CDP — real tabs, real cookies, no fresh browser.
 
-Claude Code, the amux server, and Chrome all run on the same desktop machine. Use `https://localhost:8822` for all `mcp__claude-in-chrome__navigate` calls to the amux dashboard.
+```bash
+node skills/chrome-cdp/scripts/cdp.mjs list           # list open tabs
+node skills/chrome-cdp/scripts/cdp.mjs snap <target>   # accessibility tree
+node skills/chrome-cdp/scripts/cdp.mjs shot <target>   # screenshot
+node skills/chrome-cdp/scripts/cdp.mjs click <target> <selector>
+node skills/chrome-cdp/scripts/cdp.mjs type <target> <text>
+node skills/chrome-cdp/scripts/cdp.mjs eval <target> <js>
+node skills/chrome-cdp/scripts/cdp.mjs nav <target> <url>
+```
+
+Requires Chrome remote debugging enabled (`chrome://inspect/#remote-debugging`) and Node.js 22+.
+
+Claude Code, the amux server, and Chrome all run on the same desktop machine. Use `https://localhost:8822` for amux dashboard URLs.

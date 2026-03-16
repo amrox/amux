@@ -18,9 +18,11 @@ R2_ENDPOINT           = f"https://{CF_ACCOUNT_ID}.r2.cloudflarestorage.com"
 R2_BUCKET             = "amux-cloud-users"
 COOKIE_SECRET         = os.environ.get("COOKIE_SECRET", "change-me")
 ANTHROPIC_API_KEY     = os.environ.get("ANTHROPIC_API_KEY", "")
-STRIPE_SECRET_KEY     = os.environ.get("STRIPE_SECRET_KEY", "")
-STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
-STRIPE_PRO_PRICE_ID   = os.environ.get("STRIPE_PRO_PRICE_ID", "")
+STRIPE_SECRET_KEY       = os.environ.get("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET   = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+STRIPE_PRO_PRICE_ID     = os.environ.get("STRIPE_PRO_PRICE_ID", "")      # monthly
+STRIPE_ANNUAL_PRICE_ID  = os.environ.get("STRIPE_ANNUAL_PRICE_ID", "")   # annual
+TRIAL_DAYS              = int(os.environ.get("TRIAL_DAYS", "7"))
 
 PORT          = int(os.environ.get("GATEWAY_PORT", "8080"))
 COMPOSE_TPL   = os.path.join(os.path.dirname(__file__), "../docker/docker-compose.template.yml")
@@ -233,6 +235,11 @@ def get_db():
     except sqlite3.OperationalError:
         conn.execute("ALTER TABLE users ADD COLUMN stripe_customer_id TEXT")
         conn.execute("ALTER TABLE users ADD COLUMN stripe_subscription_id TEXT")
+        conn.commit()
+    try:
+        conn.execute("SELECT trial_ends_at FROM users LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE users ADD COLUMN trial_ends_at INTEGER")
         conn.commit()
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS waitlist (
@@ -748,12 +755,23 @@ class Handler(BaseHTTPRequestHandler):
                 clerk_uid = obj.get("client_reference_id")
                 sub_id = obj.get("subscription")
                 if clerk_uid and cust_id:
+                    # Check if subscription has a trial
+                    trial_end = None
+                    if sub_id:
+                        try:
+                            import stripe as _s
+                            _s.api_key = STRIPE_SECRET_KEY
+                            sub_obj = _s.Subscription.retrieve(sub_id)
+                            if sub_obj.trial_end:
+                                trial_end = sub_obj.trial_end
+                        except Exception:
+                            pass
                     with _db_lock:
                         db.execute(
-                            "UPDATE users SET plan='pro', stripe_customer_id=?, stripe_subscription_id=? WHERE id=?",
-                            (cust_id, sub_id, clerk_uid))
+                            "UPDATE users SET plan='pro', stripe_customer_id=?, stripe_subscription_id=?, trial_ends_at=? WHERE id=?",
+                            (cust_id, sub_id, trial_end, clerk_uid))
                         db.commit()
-                    print(f"[stripe] activated pro for {clerk_uid} cust={cust_id}", flush=True)
+                    print(f"[stripe] activated pro for {clerk_uid} cust={cust_id} trial_end={trial_end}", flush=True)
             elif etype == "invoice.paid":
                 cust_id = obj.get("customer")
                 if cust_id:
@@ -1026,18 +1044,34 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/stripe/checkout" and self.command == "POST":
             if not STRIPE_SECRET_KEY or not STRIPE_PRO_PRICE_ID:
                 return self._json({"error": "billing not configured"}, 503)
+            body = self._read_body()
+            billing = body.get("billing", "monthly")  # "monthly" or "annual"
+            price_id = STRIPE_ANNUAL_PRICE_ID if billing == "annual" and STRIPE_ANNUAL_PRICE_ID else STRIPE_PRO_PRICE_ID
             import stripe
             stripe.api_key = STRIPE_SECRET_KEY
             base = self._base_url()
-            session = stripe.checkout.Session.create(
+            # Check if user already has a Stripe customer (no trial for returning)
+            row_u = db.execute("SELECT stripe_customer_id, trial_ends_at FROM users WHERE id=?", (user_id,)).fetchone()
+            has_had_trial = row_u and (row_u["stripe_customer_id"] or row_u["trial_ends_at"])
+            checkout_params = dict(
                 mode="subscription",
-                line_items=[{"price": STRIPE_PRO_PRICE_ID, "quantity": 1}],
+                line_items=[{"price": price_id, "quantity": 1}],
                 client_reference_id=user_id,
-                customer_email=user_email,
                 success_url=base + "/?billing=success",
                 cancel_url=base + "/?billing=cancel",
                 allow_promotion_codes=True,
             )
+            # Attach existing customer or set email for new
+            if row_u and row_u["stripe_customer_id"]:
+                checkout_params["customer"] = row_u["stripe_customer_id"]
+            else:
+                checkout_params["customer_email"] = user_email
+            # 7-day free trial for first-time subscribers
+            if not has_had_trial and TRIAL_DAYS > 0:
+                checkout_params["subscription_data"] = {
+                    "trial_period_days": TRIAL_DAYS,
+                }
+            session = stripe.checkout.Session.create(**checkout_params)
             return self._json({"url": session.url})
 
         if path == "/api/stripe/portal" and self.command == "POST":
@@ -1057,11 +1091,18 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"url": ps.url})
 
         if path == "/api/stripe/status" and self.command == "GET":
-            row_u = db.execute("SELECT plan, stripe_customer_id FROM users WHERE id=?", (user_id,)).fetchone()
+            row_u = db.execute("SELECT plan, stripe_customer_id, trial_ends_at FROM users WHERE id=?", (user_id,)).fetchone()
+            now = int(time.time())
+            trial_ends = row_u["trial_ends_at"] if row_u else None
+            in_trial = bool(trial_ends and trial_ends > now)
             return self._json({
                 "plan": row_u["plan"] if row_u else "free",
                 "has_billing": bool(row_u and row_u["stripe_customer_id"]),
                 "stripe_configured": bool(STRIPE_SECRET_KEY),
+                "trial_ends_at": trial_ends,
+                "in_trial": in_trial,
+                "trial_days": TRIAL_DAYS,
+                "has_annual": bool(STRIPE_ANNUAL_PRICE_ID),
             })
 
         # ── Determine target container ─────────────────────────────────────────

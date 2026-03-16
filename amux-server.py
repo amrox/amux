@@ -12314,24 +12314,11 @@ function _renderFileBody(data, mode) {
     return;
   }
   if (data.is_video) {
-    body.className = 'file-overlay-body file-video';
+    // Close the file overlay and open in the full custom video player (with resume)
+    closeFilePreview();
     const rawUrl = API + '/api/file/raw?path=' + encodeURIComponent(data.path);
     const fname = data.path.split('/').pop();
-    const sizeMB = data.size ? (data.size / 1048576).toFixed(1) + ' MB' : '';
-    const dateStr = data.modified ? new Date(data.modified * 1000).toLocaleString() : '';
-    const trackHtml = data.srt
-      ? `<track kind="captions" label="Captions" src="${API}/api/file/vtt?path=${encodeURIComponent(data.srt)}" default>`
-      : '';
-    body.innerHTML = `
-      <video class="file-video-player" controls src="${rawUrl}">${trackHtml}</video>
-      <div class="file-video-meta">
-        ${sizeMB ? `<span>${sizeMB}</span>` : ''}
-        ${dateStr ? `<span>${dateStr}</span>` : ''}
-        ${data.srt ? '<span>📝 Captions</span>' : ''}
-        ${data.profile && data.profile !== 'default' ? `<span>👤 ${esc(data.profile)}</span>` : ''}
-        ${data.task ? `<span title="${esc(data.task)}" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">🎯 ${esc(data.task)}</span>` : ''}
-        <a href="${rawUrl}" download="${fname}" style="margin-left:auto;color:var(--accent);text-decoration:none;">⬇ Download</a>
-      </div>`;
+    _playVideoUrl(rawUrl, fname);
     return;
   }
   if (data.is_audio) {
@@ -17864,23 +17851,47 @@ async function loadBillingSection() {
     sec.style.display = '';
     if (sep) sep.style.display = '';
     if (d.plan === 'pro') {
+      let statusText = 'Active subscription';
+      if (d.in_trial && d.trial_ends_at) {
+        const days = Math.ceil((d.trial_ends_at * 1000 - Date.now()) / 86400000);
+        statusText = 'Trial \u2014 ' + days + ' day' + (days !== 1 ? 's' : '') + ' remaining';
+      }
       info.innerHTML = '<div style="display:flex;align-items:center;gap:8px;">' +
         '<span style="background:var(--accent);color:#000;border-radius:4px;padding:1px 8px;font-size:0.72rem;font-weight:600;">PRO</span>' +
-        '<span>Active subscription</span></div>' +
+        '<span>' + statusText + '</span></div>' +
         (d.has_billing ? '<button class="btn" style="font-size:0.7rem;padding:3px 10px;margin-top:8px;" onclick="openBillingPortal()">Manage billing</button>' : '');
     } else {
-      info.innerHTML = '<div style="margin-bottom:8px;">Free plan — 1 session, idle timeout after 10 min</div>' +
-        '<div style="margin-bottom:6px;font-weight:600;color:var(--text);">Pro — $20/mo</div>' +
-        '<div style="font-size:0.72rem;color:var(--dim);margin-bottom:8px;">Unlimited sessions · No idle timeout · Team workspaces</div>' +
-        '<button class="btn primary" style="font-size:0.78rem;padding:5px 16px;" onclick="startCheckout()">Upgrade to Pro</button>' +
-        (d.has_billing ? '<button class="btn" style="font-size:0.7rem;padding:3px 10px;margin-left:8px;" onclick="openBillingPortal()">Manage billing</button>' : '');
+      const trialNote = d.trial_days ? '<div style="font-size:0.72rem;color:var(--green,#3fb950);margin-bottom:10px;">' + d.trial_days + '-day free trial included</div>' : '';
+      const annualBtn = d.has_annual
+        ? '<button class="btn primary" style="font-size:0.78rem;padding:5px 16px;" onclick="startCheckout(\'annual\')">Annual \u2014 $200/yr (save 17%)</button>'
+        : '';
+      info.innerHTML =
+        '<div style="margin-bottom:10px;">Free plan</div>' +
+        trialNote +
+        '<div style="display:flex;flex-direction:column;gap:8px;">' +
+          '<div style="background:var(--card,#1e1e2e);border:1px solid var(--border,#333);border-radius:8px;padding:12px;">' +
+            '<div style="font-weight:600;color:var(--text);margin-bottom:4px;">Pro Monthly \u2014 $20/mo</div>' +
+            '<div style="font-size:0.72rem;color:var(--dim);margin-bottom:8px;">Unlimited sessions \u00b7 No idle timeout \u00b7 Team workspaces</div>' +
+            '<button class="btn primary" style="font-size:0.78rem;padding:5px 16px;" onclick="startCheckout(\'monthly\')">Start free trial</button>' +
+          '</div>' +
+          (d.has_annual ? '<div style="background:var(--card,#1e1e2e);border:1px solid var(--accent,#7c6fcd);border-radius:8px;padding:12px;">' +
+            '<div style="font-weight:600;color:var(--text);margin-bottom:4px;">Pro Annual \u2014 $200/yr <span style="color:var(--green,#3fb950);font-size:0.72rem;">save 17%</span></div>' +
+            '<div style="font-size:0.72rem;color:var(--dim);margin-bottom:8px;">Same features \u00b7 $16.67/mo effective</div>' +
+            '<button class="btn primary" style="font-size:0.78rem;padding:5px 16px;" onclick="startCheckout(\'annual\')">Start free trial</button>' +
+          '</div>' : '') +
+        '</div>' +
+        (d.has_billing ? '<button class="btn" style="font-size:0.7rem;padding:3px 10px;margin-top:8px;" onclick="openBillingPortal()">Manage billing</button>' : '');
     }
   } catch(e) { sec.style.display = 'none'; if (sep) sep.style.display = 'none'; }
 }
 
-async function startCheckout() {
+async function startCheckout(billing) {
+  billing = billing || 'monthly';
   try {
-    const r = await fetch('/api/stripe/checkout', { method: 'POST' });
+    const r = await fetch('/api/stripe/checkout', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ billing })
+    });
     const d = await r.json();
     if (d.url) location.href = d.url;
     else alert(d.error || 'Failed to start checkout');
@@ -18736,21 +18747,18 @@ let _vpHideTimer = null;
 
 function _vpPosKey(url) { return 'amux_vp_pos_' + url; }
 
-function _playVideo(gid, encodedPath) {
-  const url = API + '/api/torrents/' + gid + '/file?path=' + encodedPath;
-  const fname = decodeURIComponent(encodedPath).split('/').pop();
+function _playVideoUrl(url, title) {
   const v = document.getElementById('video-player');
   v.src = url;
   v._vpUrl = url;
-  document.getElementById('vp-title').textContent = fname;
+  document.getElementById('vp-title').textContent = title || url.split('/').pop();
   document.getElementById('video-overlay').style.display = 'flex';
-  // Restore saved position after metadata loads (setting currentTime before metadata is ignored)
   const key = _vpPosKey(url);
   const raw = localStorage.getItem(key);
   const saved = parseFloat(raw);
-  console.log('[VP] _playVideo url=' + url);
-  console.log('[VP] _playVideo posKey=' + key);
-  console.log('[VP] _playVideo raw saved=' + raw + ', parsed=' + saved);
+  console.log('[VP] _playVideoUrl url=' + url);
+  console.log('[VP] _playVideoUrl posKey=' + key);
+  console.log('[VP] _playVideoUrl raw saved=' + raw + ', parsed=' + saved);
   if (saved > 0) {
     const doSeek = () => {
       console.log('[VP] loadedmetadata fired, seeking to ' + saved + ' (readyState=' + v.readyState + ')');
@@ -18770,9 +18778,14 @@ function _playVideo(gid, encodedPath) {
   v.play().catch(() => {});
   _vpStartLoop();
   _vpShowControls();
-  // Save position periodically
   v.onpause = () => { console.log('[VP] onpause, saving pos'); _vpSavePos(v); };
   v.onseeked = () => { console.log('[VP] onseeked, saving pos'); _vpSavePos(v); };
+}
+
+function _playVideo(gid, encodedPath) {
+  const url = API + '/api/torrents/' + gid + '/file?path=' + encodedPath;
+  const fname = decodeURIComponent(encodedPath).split('/').pop();
+  _playVideoUrl(url, fname);
 }
 
 function _vpSavePos(v) {
