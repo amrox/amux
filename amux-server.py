@@ -14428,10 +14428,15 @@ let _mapEditingPin = null;
 let _mapEditingTag = null;
 
 function _mapLoad() {
-  // Load from server; fall back to localStorage for offline resilience
+  // Load from localStorage immediately for instant render
+  try { var cp = localStorage.getItem('amux_map_pins'); if (cp) _mapPins = JSON.parse(cp); } catch(e) {}
+  try { var ct = localStorage.getItem('amux_map_tags'); if (ct) _mapTags = JSON.parse(ct); } catch(e) {}
+  try { var cs = localStorage.getItem('amux_map_settings'); if (cs) _mapSettings = Object.assign(_mapSettings, JSON.parse(cs)); } catch(e) {}
+  if (_mapPins.length || _mapTags.length) { _mapRenderTags(); _mapRenderPins(); _mapRenderMarkers(); }
+  // Then fetch fresh from server
   fetch(API + '/api/map').then(function(r) { return r.ok ? r.json() : null; }).then(function(data) {
     if (!data) return;
-    const firstLoad = _mapPins.length === 0;
+    var firstLoad = _mapPins.length === 0;
     var needsSave = false;
     _mapPins = (data.pins || []).map(function(pin, i) {
       if (!pin.id) { pin.id = 'pin_' + Date.now() + '_' + i; needsSave = true; }
@@ -14441,10 +14446,15 @@ function _mapLoad() {
     _mapTags = data.tags || [];
     _mapSettings = Object.assign(_mapSettings, data.settings || {});
     _mapGoogleKey = (data.settings || {}).googleMapsKey || '';
+    // Cache for offline
+    try {
+      localStorage.setItem('amux_map_pins', JSON.stringify(_mapPins));
+      localStorage.setItem('amux_map_tags', JSON.stringify(_mapTags));
+      localStorage.setItem('amux_map_settings', JSON.stringify(_mapSettings));
+    } catch(e) {}
     _mapRenderTags();
     _mapRenderPins();
     _mapRenderMarkers();
-    // On first load with pins, fit map to show all of them
     if (firstLoad && _map && _mapPins.length > 0) {
       var coords = _mapPins.filter(function(p) {
         return !isNaN(parseFloat(p.lat)) && !isNaN(parseFloat(p.lng));
@@ -14453,24 +14463,23 @@ function _mapLoad() {
       else if (coords.length > 1) { _map.fitBounds(coords, { padding: [40, 40], maxZoom: 15 }); }
     }
   }).catch(function() {
-    // offline fallback
-    try { _mapPins = JSON.parse(localStorage.getItem('amux_map_pins') || '[]'); } catch(e) { _mapPins = []; }
-    try { _mapTags = JSON.parse(localStorage.getItem('amux_map_tags') || '[]'); } catch(e) { _mapTags = []; }
-    try { var s = localStorage.getItem('amux_map_settings'); if (s) _mapSettings = Object.assign(_mapSettings, JSON.parse(s)); } catch(e) {}
+    // Already loaded from cache above; render if not done
+    if (_mapPins.length || _mapTags.length) { _mapRenderTags(); _mapRenderPins(); _mapRenderMarkers(); }
   });
 }
 
 function _mapSave() {
-  var payload = { pins: _mapPins, tags: _mapTags, settings: _mapSettings };
-  fetch(API + '/api/map', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  }).catch(function() {
-    // offline fallback
+  // Always cache locally for offline resilience
+  try {
     localStorage.setItem('amux_map_pins', JSON.stringify(_mapPins));
     localStorage.setItem('amux_map_tags', JSON.stringify(_mapTags));
     localStorage.setItem('amux_map_settings', JSON.stringify(_mapSettings));
+  } catch(e) {}
+  var payload = { pins: _mapPins, tags: _mapTags, settings: _mapSettings };
+  apiCall(API + '/api/map', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
   });
 }
 
@@ -15294,16 +15303,20 @@ function _stopLogsTimer() {
 async function fetchSchedules() {
   try {
     const r = await fetch(API + '/api/schedules');
-    if (r.ok) { schedules = await r.json(); }
-  } catch(e) {}
+    if (r.ok) { schedules = await r.json(); try { localStorage.setItem('amux_schedules_cache', JSON.stringify(schedules)); } catch(e) {} }
+  } catch(e) {
+    try { var c = localStorage.getItem('amux_schedules_cache'); if (c) schedules = JSON.parse(c); } catch(e2) {}
+  }
 }
 
 let _schedulerRuns = [];
 async function fetchSchedulerRuns() {
   try {
     const r = await fetch(API + '/api/schedules/runs');
-    if (r.ok) _schedulerRuns = await r.json();
-  } catch(e) {}
+    if (r.ok) { _schedulerRuns = await r.json(); try { localStorage.setItem('amux_sched_runs_cache', JSON.stringify(_schedulerRuns)); } catch(e) {} }
+  } catch(e) {
+    try { var c = localStorage.getItem('amux_sched_runs_cache'); if (c) _schedulerRuns = JSON.parse(c); } catch(e2) {}
+  }
 }
 
 function renderScheduler() {
@@ -15373,7 +15386,7 @@ function renderScheduler() {
 }
 
 async function toggleSchedEnabled(id, enabled) {
-  await fetch(API + '/api/schedules/' + id, {
+  await apiCall(API + '/api/schedules/' + id, {
     method: 'PATCH', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ enabled: enabled ? 1 : 0 })
   });
@@ -15637,7 +15650,8 @@ async function _togglePin(id) {
   const item = boardItems.find(i => i.id === id);
   if (!item) return;
   const newVal = item.pinned ? 0 : 1;
-  await fetch(API + '/api/board/' + id, {
+  item.pinned = newVal; // optimistic update
+  await apiCall(API + '/api/board/' + id, {
     method: 'PATCH', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ pinned: newVal }),
   });
@@ -15975,8 +15989,8 @@ async function saveSchedModal() {
                     schedule_expr: schedExpr || null };
   const url = _schedEditId ? API + '/api/schedules/' + _schedEditId : API + '/api/schedules';
   const method = _schedEditId ? 'PATCH' : 'POST';
-  const r = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-  if (r.ok) {
+  const r = await apiCall(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+  if (r) {
     await fetchSchedules();
     renderCalendar();
     renderScheduler();
@@ -15985,7 +15999,7 @@ async function saveSchedModal() {
 }
 async function deleteSchedule(id) {
   if (!confirm('Delete this schedule?')) return;
-  await fetch(API + '/api/schedules/' + id, { method: 'DELETE' });
+  await apiCall(API + '/api/schedules/' + id, { method: 'DELETE' });
   await fetchSchedules();
   renderCalendar();
   renderScheduler();
@@ -20015,8 +20029,16 @@ function _crmApplySidebarState() {
 }
 
 async function _crmLoad() {
-  const r = await fetch(API + '/api/crm/contacts');
-  _crmContacts = await r.json();
+  try {
+    const r = await fetch(API + '/api/crm/contacts');
+    if (r.ok) {
+      _crmContacts = await r.json();
+      try { localStorage.setItem('amux_crm_cache', JSON.stringify(_crmContacts)); } catch(e) {}
+    }
+  } catch(e) {
+    // offline fallback
+    try { var c = localStorage.getItem('amux_crm_cache'); if (c) _crmContacts = JSON.parse(c); } catch(e2) {}
+  }
   _crmRenderList(_crmContacts);
   _crmRenderQueue(_crmContacts);
 }
@@ -20111,17 +20133,25 @@ async function _crmOpenContact(id) {
   // Cancel any in-flight fetch
   if (_crmOpenAbort) _crmOpenAbort.abort();
   _crmOpenAbort = new AbortController();
-  let r;
+  let data;
   try {
-    r = await fetch(API + '/api/crm/contacts/' + encodeURIComponent(id), { signal: _crmOpenAbort.signal });
+    const r = await fetch(API + '/api/crm/contacts/' + encodeURIComponent(id), { signal: _crmOpenAbort.signal });
+    if (!r.ok) throw new Error('not ok');
+    data = await r.json();
+    // Cache for offline
+    _idb.set('amux_crm_' + id, JSON.stringify(data));
   } catch(e) {
     if (e.name === 'AbortError') return;
-    form.style.opacity = '';
-    return;
+    // Try IDB cache
+    try { var cached = await _idb.get('amux_crm_' + id); if (cached) data = JSON.parse(cached); } catch(e2) {}
+    if (!data) {
+      // Try in-memory list as last resort
+      data = _crmContacts.find(function(c) { return c.id === id; });
+    }
+    if (!data) { form.style.opacity = ''; return; }
   }
-  if (!r.ok) { form.style.opacity = ''; return; }
   form.style.opacity = '';
-  _crmRenderDetail(await r.json());
+  _crmRenderDetail(data);
 }
 
 const _CRM_TRASH_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>';
