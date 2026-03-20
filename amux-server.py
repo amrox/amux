@@ -722,6 +722,16 @@ def _log_event(category: str, action: str, *, session: str = None,
     # Also push to the SSE event log ring so the Logs tab receives it live
     with _event_log_lock:
         _event_log.append(evt)
+    # Auto-log meaningful actions to the session's active board issue
+    if session and category in ("session", "board", "memory", "git"):
+        _SKIP_ACTIONS = {"peeked", "message-sent"}  # noisy / already captured
+        if action not in _SKIP_ACTIONS:
+            issue_id = _session_board_issue_id(session)
+            if issue_id:
+                msg = f"**{action}**"
+                if detail:
+                    msg += f" — {detail[:200]}"
+                threading.Thread(target=_append_board_log, args=(issue_id, msg), daemon=True).start()
 
 
 def _last_meaningful_user_message(work_dir: str) -> str:
@@ -2000,7 +2010,8 @@ def _update_meta(name: str, **kwargs):
 
 
 def _summarize_task_bg(session_name: str, text: str):
-    """Call Claude Haiku in a background thread to summarize a message into a 3-word task label."""
+    """Call Claude Haiku in a background thread to summarize a message into a 3-word task label,
+    then auto-create a board issue for the session."""
     def _run():
         try:
             import anthropic
@@ -2014,9 +2025,94 @@ def _summarize_task_bg(session_name: str, text: str):
             summary = msg.content[0].text.strip().rstrip(".")
             if summary:
                 _update_meta(session_name, task_summary=summary)
+                _auto_create_board_issue(session_name, summary, text)
         except Exception:
             pass
     threading.Thread(target=_run, daemon=True).start()
+
+
+def _auto_create_board_issue(session_name: str, title: str, prompt_text: str):
+    """Create or update a board issue for a session task. If the session already has an
+    active (non-done/discarded) issue, update its title instead of creating a duplicate."""
+    try:
+        db = get_db()
+        # Check for existing active issue for this session
+        existing = db.execute(
+            "SELECT id, status FROM issues WHERE session=? AND deleted IS NULL "
+            "AND status NOT IN ('done','discarded') ORDER BY created DESC LIMIT 1",
+            (session_name,)
+        ).fetchone()
+        now = int(time.time())
+        if existing:
+            # Update title and move to doing
+            db.execute("UPDATE issues SET title=?, status='doing', updated=? WHERE id=?",
+                       (title, now, existing["id"]))
+            db.commit()
+            _sse_cache["board"]["time"] = 0
+            _append_board_log(existing["id"], f"New task: {prompt_text[:200]}")
+            return
+        # Create new issue
+        prefix = _prefix_from_session(session_name)
+        item_id = _next_issue_id(prefix)
+        db.execute(
+            """INSERT INTO issues (id, title, desc, status, session, creator, created, updated, owner_type)
+               VALUES (?, ?, ?, 'doing', ?, 'amux', ?, ?, 'agent')""",
+            (item_id, title, f"**Prompt:** {prompt_text[:300]}", session_name, now, now),
+        )
+        db.commit()
+        _sse_cache["board"]["time"] = 0
+    except Exception as e:
+        print(f"[board] auto-create failed for {session_name}: {e}", flush=True)
+
+
+def _append_board_log(issue_id: str, line: str):
+    """Append an action line to a board issue's description."""
+    try:
+        db = get_db()
+        row = db.execute("SELECT desc FROM issues WHERE id=?", (issue_id,)).fetchone()
+        if not row:
+            return
+        desc = row["desc"] or ""
+        ts = time.strftime("%H:%M")
+        desc = desc.rstrip() + f"\n`{ts}` {line}"
+        db.execute("UPDATE issues SET desc=?, updated=? WHERE id=?",
+                   (desc, int(time.time()), issue_id))
+        db.commit()
+        _sse_cache["board"]["time"] = 0
+    except Exception:
+        pass
+
+
+def _session_board_issue_id(session_name: str) -> str | None:
+    """Return the active board issue ID for a session, if any."""
+    try:
+        row = get_db().execute(
+            "SELECT id FROM issues WHERE session=? AND deleted IS NULL "
+            "AND status NOT IN ('done','discarded') ORDER BY created DESC LIMIT 1",
+            (session_name,)
+        ).fetchone()
+        return row["id"] if row else None
+    except Exception:
+        return None
+
+
+def _complete_session_board_issue(session_name: str):
+    """Move a session's active board issue to done."""
+    try:
+        db = get_db()
+        row = db.execute(
+            "SELECT id FROM issues WHERE session=? AND deleted IS NULL "
+            "AND status NOT IN ('done','discarded') ORDER BY created DESC LIMIT 1",
+            (session_name,)
+        ).fetchone()
+        if row:
+            now = int(time.time())
+            _append_board_log(row["id"], "Session completed")
+            db.execute("UPDATE issues SET status='done', updated=? WHERE id=?", (now, row["id"]))
+            db.commit()
+            _sse_cache["board"]["time"] = 0
+    except Exception:
+        pass
 
 
 _DEFAULT_STATUSES = [
@@ -2925,6 +3021,8 @@ def _parse_task_time(raw_output: str) -> str:
     return ""
 
 
+_session_prev_status: dict[str, str] = {}  # track status changes for board auto-updates
+
 def list_sessions() -> list:
     sessions = []
     if not CC_SESSIONS.is_dir():
@@ -2974,6 +3072,11 @@ def list_sessions() -> list:
             preview = strip_ansi(lines[-1][:120]) if lines else ""
             if running:
                 status = _detect_claude_status(raw)
+            # Detect session becoming idle → auto-complete board issue
+            prev = _session_prev_status.get(name)
+            if prev in ("active", "waiting") and status == "idle":
+                threading.Thread(target=_complete_session_board_issue, args=(name,), daemon=True).start()
+            _session_prev_status[name] = status
             # Filter for intelligible content lines
             intelligible = []
             for l in lines:
@@ -6502,6 +6605,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .board-filter-chip.active-session { background: rgba(139,148,158,0.15); color: var(--text); border-color: var(--dim); }
   /* Board toolbar + view toggle */
   .board-toolbar { display: flex; gap: 8px; align-items: center; }
+  .board-owner-toggle { display: flex; gap: 2px; background: rgba(255,255,255,0.04); border-radius: 6px; padding: 2px; flex-shrink: 0; }
   .board-view-toggle { display: flex; gap: 2px; background: rgba(255,255,255,0.04); border-radius: 6px; padding: 2px; flex-shrink: 0; }
   .bv-btn {
     padding: 5px 8px; border: none; background: none; color: var(--dim);
@@ -7686,6 +7790,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <button class="search-clear" onclick="document.getElementById('board-search').value='';boardSearchQuery='';renderBoard()">&#x2715;</button>
     </div>
     <button class="btn primary" onclick="openBoardAdd('todo')" style="font-size:0.8rem;padding:5px 12px;white-space:nowrap;flex-shrink:0;">+ New issue</button>
+    <div class="board-owner-toggle">
+      <button id="bo-human" class="bv-btn" onclick="setBoardOwner('human')" title="Human issues">Human</button>
+      <button id="bo-agent" class="bv-btn" onclick="setBoardOwner('agent')" title="Session issues">Sessions</button>
+    </div>
     <div class="board-view-toggle">
       <button id="bv-session" class="bv-btn" onclick="setBoardView('session')" title="Group by session">&#x25A4;</button>
       <button id="bv-status" class="bv-btn" onclick="setBoardView('status')" title="Group by status">&#x2630;</button>
@@ -14640,6 +14748,7 @@ let boardFilterSession = null;
 let boardSearchQuery = '';
 let _boardDragId = null;
 let boardViewMode = localStorage.getItem('amux_board_view') || 'session';
+let boardOwnerFilter = localStorage.getItem('amux_board_owner') || 'human';
 let _sessionGroupCollapsed = JSON.parse(localStorage.getItem('amux_board_collapsed') || '{}');
 let _tagGroupCollapsed = JSON.parse(localStorage.getItem('amux_status_collapsed') || '{}');
 let _collapsedCols = new Set(JSON.parse(localStorage.getItem('amux_col_collapsed') || '[]'));
@@ -15946,6 +16055,12 @@ function setBoardView(mode) {
   renderBoard();
 }
 
+function setBoardOwner(type) {
+  boardOwnerFilter = type;
+  localStorage.setItem('amux_board_owner', type);
+  renderBoard();
+}
+
 function toggleSessionGroup(name) {
   _sessionGroupCollapsed[name] = !_sessionGroupCollapsed[name];
   localStorage.setItem('amux_board_collapsed', JSON.stringify(_sessionGroupCollapsed));
@@ -16070,8 +16185,12 @@ function renderBoard() {
   var bvC = document.getElementById('bv-status');
   if (bvS) bvS.classList.toggle('active', boardViewMode === 'session');
   if (bvC) bvC.classList.toggle('active', boardViewMode === 'status');
+  var boH = document.getElementById('bo-human');
+  var boA = document.getElementById('bo-agent');
+  if (boH) boH.classList.toggle('active', boardOwnerFilter === 'human');
+  if (boA) boA.classList.toggle('active', boardOwnerFilter === 'agent');
 
-  let visible = boardItems;
+  let visible = boardItems.filter(i => boardOwnerFilter === 'agent' ? i.owner_type === 'agent' : i.owner_type !== 'agent');
   if (boardFilterTag) visible = visible.filter(i => (i.tags || []).includes(boardFilterTag));
   if (boardFilterSession) visible = visible.filter(i => i.session === boardFilterSession);
   if (boardSearchQuery) {
@@ -24690,6 +24809,8 @@ p{{color:#888;margin:12px 0 28px;font-size:0.9rem;line-height:1.5}}
                 return self._json({"ok": ok, "message": msg, "resumed": bool(meta.get("cc_conversation_id"))}, 200 if ok else 500)
             if action == "stop":
                 ok, msg = stop_session(name)
+                if ok:
+                    threading.Thread(target=_complete_session_board_issue, args=(name,), daemon=True).start()
                 return self._json({"ok": ok, "message": msg}, 200 if ok else 500)
             if action == "clear":
                 try:
