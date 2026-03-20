@@ -3074,9 +3074,15 @@ def list_sessions() -> list:
                 status = _detect_claude_status(raw)
             # Detect session becoming idle → auto-complete board issue
             prev = _session_prev_status.get(name)
-            if prev in ("active", "waiting") and status == "idle":
+            if status == "idle" and prev in ("active", "waiting"):
                 threading.Thread(target=_complete_session_board_issue, args=(name,), daemon=True).start()
-            _session_prev_status[name] = status
+            elif status == "idle" and prev == "idle" and not running:
+                # Session stopped while idle — ensure board issue is completed
+                threading.Thread(target=_complete_session_board_issue, args=(name,), daemon=True).start()
+            elif status == "" and prev in ("active", "waiting", "idle"):
+                # Session went from running to not running
+                threading.Thread(target=_complete_session_board_issue, args=(name,), daemon=True).start()
+            _session_prev_status[name] = status if running else ""
             # Filter for intelligible content lines
             intelligible = []
             for l in lines:
@@ -24704,6 +24710,7 @@ p{{color:#888;margin:12px 0 28px;font-size:0.9rem;line-height:1.5}}
                 ok, msg = send_text(name, text)
                 if ok:
                     _update_meta(name, last_send=int(time.time()), last_send_text=text[:200])
+                    _session_prev_status[name] = "active"  # seed for idle detection
                     _summarize_task_bg(name, text)
                 # 409 = session exists but is not running (user-caused, not a server error)
                 code = 200 if ok else (409 if msg == "not running" else 500)
