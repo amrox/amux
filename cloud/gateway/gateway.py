@@ -128,6 +128,21 @@ _LOGIN_HTML = """<!DOCTYPE html>
       }
     }
 
+    // In WKWebView/PWA, window.open popups silently fail (Clerk OAuth uses popups).
+    // Override to navigate in-place — OAuth callback will redirect back here.
+    (function() {
+      const isNative = /AmuxApp/.test(navigator.userAgent);
+      const isStandalone = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+      const isIOSWebView = /iPhone|iPad/.test(navigator.userAgent) && !/Safari\//.test(navigator.userAgent);
+      if (isNative || isStandalone || isIOSWebView) {
+        window._origOpen = window.open;
+        window.open = function(url) {
+          if (url) window.location.href = url;
+          return null;
+        };
+      }
+    })();
+
     const s = document.createElement('script');
     s.setAttribute('data-clerk-publishable-key', PK);
     s.src = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@4/dist/clerk.browser.js';
@@ -142,15 +157,6 @@ _LOGIN_HTML = """<!DOCTYPE html>
           await window.Clerk.signOut();
         }
         if (window.Clerk.user) { await exchangeAndRedirect(); return; }
-        // WKWebView and standalone PWA can't handle Clerk's popup-based OAuth.
-        // Detect: native app (AmuxApp UA), standalone PWA, or any iOS webview.
-        const isNative = /AmuxApp/.test(navigator.userAgent);
-        const isStandalone = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
-        const isIOSWebView = /iPhone|iPad/.test(navigator.userAgent) && !/Safari\//.test(navigator.userAgent);
-        if (isNative || isStandalone || isIOSWebView) {
-          window.Clerk.redirectToSignIn({ redirectUrl: window.location.origin + '/' });
-          return;
-        }
         window.Clerk.mountSignIn(document.getElementById('clerk-root'), { routing: 'hash' });
         window.Clerk.addListener(({ user }) => {
           if (user && !exchanging) exchangeAndRedirect();
