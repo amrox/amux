@@ -996,6 +996,19 @@ def _snapshot_all_sessions():
                     _push_alert("auto_compact", name,
                                 f"Auto-compacted '{name}' — context was at {pct}%")
 
+            # ── 1b. Reactive: image dimension limit → auto-compact ─────────
+            # Sessions using browser screenshots fill context with large images
+            # until Claude errors with "image exceeds the dimension limit".
+            # The session gets stuck at the prompt unable to proceed.
+            if ("image" in clean and "exceeds the dimension limit" in clean and
+                    now - actions.get("last_compact", 0) > 120):
+                actions["last_compact"] = now
+                actions["post_compact_continue"] = True
+                threading.Thread(target=backup_session_jsonl, args=(name, "pre_compact_img"), daemon=True).start()
+                send_text(name, "/compact")
+                _push_alert("auto_compact", name,
+                            f"Auto-compacted '{name}' — image dimension limit hit")
+
             # ── 2. Reactive: thinking-block corruption → restart + replay ───
             if ("redacted_thinking" in clean and
                     "cannot be modified" in clean and
@@ -22321,7 +22334,19 @@ class CCHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         if length == 0:
             return {}
-        return json.loads(self.rfile.read(length))
+        raw = self.rfile.read(length)
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            # Fix invalid JSON escape sequences — common when AI agents send
+            # text containing literal backslashes (paths, regex, etc.).
+            # Valid JSON escapes: \", \\, \/, \b, \f, \n, \r, \t, \uXXXX
+            # Anything else (e.g. \U, \x, \a, \p, \u without 4 hex digits)
+            # is invalid — escape the backslash so json.loads succeeds.
+            import re
+            text = raw.decode("utf-8", errors="replace")
+            fixed = re.sub(r'\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})', r'\\\\', text)
+            return json.loads(fixed)
 
     def _route(self, method: str):
         global _server_request_count
