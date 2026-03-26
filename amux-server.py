@@ -60,6 +60,7 @@ CC_NOTIFICATIONS = CC_HOME / "notifications.json"
 CC_TRANSCRIPTS = CC_HOME / "transcripts"  # per-session JSONL backups
 CC_GMAIL = CC_HOME / "gmail-tokens"        # per-account Gmail OAuth tokens
 CC_BRANDING = CC_HOME / "branding"         # white-label assets (icon, logo)
+CC_JOURNAL_MEDIA = CC_HOME / "journal-media"  # journal photo/media files
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 def _safe_note_path(note_rel: str, base: Path = None) -> Path | None:
@@ -144,6 +145,7 @@ CC_NOTES.mkdir(parents=True, exist_ok=True)
 CC_TRANSCRIPTS.mkdir(parents=True, exist_ok=True)
 CC_GMAIL.mkdir(parents=True, exist_ok=True)
 CC_BRANDING.mkdir(parents=True, exist_ok=True)
+CC_JOURNAL_MEDIA.mkdir(parents=True, exist_ok=True)
 
 UPLOAD_ALLOWED_EXTS = None  # None = allow all file types
 UPLOAD_MAX_BYTES = 20 * 1024 * 1024  # 20 MB
@@ -543,6 +545,7 @@ def _classify_request(method: str, path: str) -> tuple:
 _sse_alerts: list = []           # ring buffer of alert dicts pushed to all SSE clients
 _notes_version: int = 0             # bumped on any notes write; triggers SSE invalidation
 _crm_version: int = 0               # bumped on any CRM write; triggers SSE invalidation
+_journal_version: int = 0           # bumped on any journal write; triggers SSE invalidation
 _sse_alert_lock = threading.Lock()
 _send_locks: dict = {}          # per-session locks for serializing send_text/send_keys
 _send_locks_lock = threading.Lock()  # protects _send_locks dict itself
@@ -1544,6 +1547,33 @@ CREATE TABLE IF NOT EXISTS crm_interactions (
 CREATE INDEX IF NOT EXISTS idx_crm_contacts_upd ON crm_contacts(updated) WHERE deleted IS NULL;
 CREATE INDEX IF NOT EXISTS idx_crm_ix_contact   ON crm_interactions(contact_id, date DESC);
 CREATE INDEX IF NOT EXISTS idx_crm_ix_followup  ON crm_interactions(follow_up_date) WHERE follow_up_date IS NOT NULL;
+CREATE TABLE IF NOT EXISTS journal_entries (
+    id          TEXT PRIMARY KEY,
+    text        TEXT NOT NULL DEFAULT '',
+    date        TEXT NOT NULL,
+    created     INTEGER NOT NULL,
+    updated     INTEGER NOT NULL,
+    lat         REAL,
+    lng         REAL,
+    place_name  TEXT NOT NULL DEFAULT '',
+    starred     INTEGER NOT NULL DEFAULT 0,
+    tags        TEXT NOT NULL DEFAULT '',
+    prompt1     TEXT NOT NULL DEFAULT '',
+    prompt2     TEXT NOT NULL DEFAULT '',
+    prompt3     TEXT NOT NULL DEFAULT '',
+    deleted     INTEGER
+);
+CREATE TABLE IF NOT EXISTS journal_media (
+    id          TEXT PRIMARY KEY,
+    entry_id    TEXT NOT NULL,
+    filename    TEXT NOT NULL,
+    mime        TEXT NOT NULL DEFAULT 'image/jpeg',
+    position    INTEGER NOT NULL DEFAULT 0,
+    created     INTEGER NOT NULL,
+    FOREIGN KEY (entry_id) REFERENCES journal_entries(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_journal_date ON journal_entries(date DESC) WHERE deleted IS NULL;
+CREATE INDEX IF NOT EXISTS idx_journal_media_entry ON journal_media(entry_id);
 CREATE TABLE IF NOT EXISTS share_tokens (
     token      TEXT PRIMARY KEY,
     session    TEXT NOT NULL,
@@ -1558,6 +1588,32 @@ CREATE TABLE IF NOT EXISTS layout_presets (
     tab_order  TEXT NOT NULL DEFAULT '[]',
     created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS graph_nodes (
+    id          TEXT PRIMARY KEY,
+    graph_id    TEXT NOT NULL DEFAULT 'default',
+    label       TEXT NOT NULL,
+    body        TEXT NOT NULL DEFAULT '',
+    color       TEXT NOT NULL DEFAULT '#ffffff',
+    folder      TEXT NOT NULL DEFAULT '',
+    source_path TEXT NOT NULL DEFAULT '',
+    x           REAL,
+    y           REAL,
+    pinned      INTEGER NOT NULL DEFAULT 0,
+    created     INTEGER NOT NULL,
+    updated     INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS graph_edges (
+    id          TEXT PRIMARY KEY,
+    graph_id    TEXT NOT NULL DEFAULT 'default',
+    source      TEXT NOT NULL,
+    target      TEXT NOT NULL,
+    label       TEXT NOT NULL DEFAULT '',
+    created     INTEGER NOT NULL,
+    FOREIGN KEY (source) REFERENCES graph_nodes(id) ON DELETE CASCADE,
+    FOREIGN KEY (target) REFERENCES graph_nodes(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_graph ON graph_nodes(graph_id);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_graph ON graph_edges(graph_id);
 """
 
 
@@ -1861,6 +1917,7 @@ def _init_db():
         "ALTER TABLE issues ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE schedules ADD COLUMN run_count INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE schedules ADD COLUMN schedule_expr TEXT",
+        "ALTER TABLE graph_nodes ADD COLUMN source_path TEXT NOT NULL DEFAULT ''",
     ]:
         try:
             db.execute(migration)
@@ -7869,6 +7926,121 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     .metrics-expand-btn { display: flex; }
   }
 
+  /* ── Graph / Mind Map ── */
+  #graph-view { height: calc(100vh - 110px); display: flex; position: relative; overflow: hidden; background: var(--bg); }
+  .graph-canvas { position: absolute; inset: 0; background: radial-gradient(circle, rgba(255,255,255,0.03) 1px, transparent 1px); background-size: 24px 24px; cursor: grab; overflow: hidden; }
+  .graph-canvas.grabbing { cursor: grabbing; }
+  .graph-controls { position: absolute; top: 8px; left: 8px; display: flex; flex-direction: column; gap: 3px; z-index: 15; background: var(--bg); border-radius: 8px; border: 1px solid var(--border); padding: 4px; }
+  .graph-controls button { width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--fg); font-size: 1rem; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .graph-controls button:hover { background: var(--hover); }
+  .graph-filters { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; z-index: 15; flex-wrap: wrap; padding: 6px 8px; background: var(--bg); border-radius: 8px; border: 1px solid var(--border); backdrop-filter: blur(8px); max-width: 50%; }
+  .graph-filter-btn { padding: 3px 8px; font-size: 0.68rem; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--dim); cursor: pointer; transition: all 0.15s; white-space: nowrap; }
+  .graph-filter-btn.active { color: #fff; border-color: transparent; }
+  .graph-filter-btn.active[data-folder="Memories"] { background: #C97B3A; }
+  .graph-filter-btn.active[data-folder="Patterns"] { background: #4A6FA5; }
+  .graph-filter-btn.active[data-folder="Beliefs"] { background: #A54A4A; }
+  .graph-filter-btn.active[data-folder="Behaviors"] { background: #4A9A6F; }
+  .graph-filter-btn.active[data-folder="Relationship - Her"] { background: #7A4AA5; }
+  .graph-filter-btn.active[data-folder="root"] { background: #666; }
+  .graph-node { position: absolute; padding: 8px 14px; border-radius: 8px; font-size: 0.78rem; font-weight: 500; cursor: grab; user-select: none; border: 1.5px solid transparent; transition: box-shadow 0.15s, opacity 0.2s; white-space: nowrap; z-index: 2; }
+  .graph-node:hover { box-shadow: 0 0 12px rgba(255,255,255,0.1); z-index: 5; }
+  .graph-node.dragging { cursor: grabbing; z-index: 10; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+  .graph-node.dimmed { opacity: 0.15; }
+  .graph-node.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+  .graph-edge { pointer-events: stroke; }
+  .graph-edge.dimmed { opacity: 0.05; }
+  .graph-edge:hover { stroke-opacity: 1 !important; }
+  .graph-side-panel { position: absolute; top: 0; right: 0; bottom: 0; width: 320px; background: var(--surface); border-left: 1px solid var(--border); z-index: 20; display: none; flex-direction: column; overflow: hidden; }
+  .graph-side-panel.open { display: flex; }
+  .graph-side-header { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+  .graph-side-header .badge { font-size: 0.65rem; padding: 2px 8px; border-radius: 10px; color: #fff; }
+  .graph-side-body { flex: 1; padding: 14px; overflow-y: auto; font-size: 0.82rem; line-height: 1.6; color: var(--fg); }
+  .graph-side-body h1, .graph-side-body h2, .graph-side-body h3 { margin: 12px 0 6px; color: var(--fg); }
+  .graph-side-body p { margin: 6px 0; }
+  .graph-side-body blockquote { border-left: 3px solid var(--accent); padding-left: 12px; margin: 8px 0; color: var(--dim); font-style: italic; }
+  .graph-side-body ul, .graph-side-body ol { padding-left: 20px; margin: 6px 0; }
+  .graph-side-links { padding: 12px 14px; border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 6px; }
+  .graph-side-links .chip { font-size: 0.7rem; padding: 3px 10px; border-radius: 10px; cursor: pointer; border: 1px solid var(--border); background: var(--bg); color: var(--fg); }
+  .graph-side-links .chip:hover { background: var(--hover); }
+  @media (max-width: 600px) {
+    #graph-view { height: calc(100dvh - 122px); }
+    .graph-side-panel { width: 100%; }
+    .graph-filters { top: auto; bottom: 12px; right: 12px; left: 12px; justify-content: center; }
+  }
+
+  /* ── Journal ── */
+  #journal-view { height: calc(100vh - 110px); display: flex; flex-direction: row; overflow: hidden; }
+  .jrnl-sidebar { width: 320px; min-width: 260px; border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+  .jrnl-sidebar-hdr { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  .jrnl-sidebar-hdr .jrnl-new-btn { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 4px 10px; font-size: 0.75rem; cursor: pointer; font-weight: 600; }
+  .jrnl-search-wrap { padding: 6px 10px; border-bottom: 1px solid var(--border); }
+  .jrnl-search-wrap input { width: 100%; padding: 5px 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); font-size: 0.78rem; font-family: inherit; }
+  .jrnl-tags-bar { display: flex; gap: 4px; padding: 6px 10px; overflow-x: auto; flex-wrap: nowrap; border-bottom: 1px solid var(--border); }
+  .jrnl-tags-bar:empty { display: none; }
+  .jrnl-tag-chip { padding: 2px 8px; font-size: 0.68rem; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--dim); cursor: pointer; white-space: nowrap; }
+  .jrnl-tag-chip.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .jrnl-entry-list { flex: 1; overflow-y: auto; }
+  .jrnl-entry-card { padding: 10px 12px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.1s; }
+  .jrnl-entry-card:hover { background: var(--hover); }
+  .jrnl-entry-card.active { background: var(--surface); border-left: 3px solid var(--accent); }
+  .jrnl-entry-date { font-size: 0.68rem; color: var(--dim); margin-bottom: 2px; }
+  .jrnl-entry-preview { font-size: 0.8rem; color: var(--fg); line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+  .jrnl-entry-meta { display: flex; gap: 6px; align-items: center; margin-top: 4px; flex-wrap: wrap; }
+  .jrnl-entry-meta .loc { font-size: 0.65rem; color: var(--dim); }
+  .jrnl-entry-meta .tag { font-size: 0.6rem; padding: 1px 6px; border-radius: 8px; background: rgba(63,185,80,0.15); color: var(--accent); }
+  .jrnl-entry-meta .media-count { font-size: 0.6rem; color: var(--dim); }
+  .jrnl-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .jrnl-sub-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); padding: 0 12px; }
+  .jrnl-sub-tab { padding: 8px 16px; font-size: 0.78rem; background: none; border: none; color: var(--dim); cursor: pointer; border-bottom: 2px solid transparent; font-family: inherit; }
+  .jrnl-sub-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .jrnl-sub-tab:hover { color: var(--fg); }
+  .jrnl-content { flex: 1; overflow-y: auto; position: relative; }
+  /* List/detail editor */
+  .jrnl-editor { padding: 20px 24px; max-width: 720px; }
+  .jrnl-editor-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--dim); font-size: 0.85rem; }
+  .jrnl-editor label { font-size: 0.72rem; color: var(--dim); display: block; margin-bottom: 4px; margin-top: 14px; }
+  .jrnl-editor textarea { width: 100%; min-height: 100px; padding: 8px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); font-size: 0.82rem; font-family: inherit; resize: vertical; line-height: 1.5; }
+  .jrnl-editor textarea.prompt-area { min-height: 60px; }
+  .jrnl-editor input[type="text"], .jrnl-editor input[type="date"] { width: 100%; padding: 6px 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); font-size: 0.8rem; font-family: inherit; }
+  .jrnl-editor .jrnl-toolbar { display: flex; gap: 8px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
+  .jrnl-editor .jrnl-toolbar button { padding: 5px 12px; font-size: 0.75rem; border-radius: 6px; cursor: pointer; font-family: inherit; }
+  .jrnl-editor .jrnl-save-btn { background: var(--accent); color: #fff; border: none; font-weight: 600; }
+  .jrnl-editor .jrnl-del-btn { background: none; border: 1px solid var(--border); color: var(--dim); }
+  .jrnl-editor .jrnl-del-btn:hover { border-color: #f85149; color: #f85149; }
+  .jrnl-loc-btn { background: none; border: 1px solid var(--border); color: var(--dim); padding: 4px 10px; border-radius: 6px; font-size: 0.72rem; cursor: pointer; font-family: inherit; }
+  .jrnl-loc-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .jrnl-media-grid { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .jrnl-media-thumb { width: 80px; height: 80px; border-radius: 6px; object-fit: cover; cursor: pointer; border: 1px solid var(--border); }
+  .jrnl-media-upload { width: 80px; height: 80px; border: 2px dashed var(--border); border-radius: 6px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--dim); font-size: 1.2rem; }
+  .jrnl-media-upload:hover { border-color: var(--accent); color: var(--accent); }
+  /* Calendar view */
+  .jrnl-cal { padding: 16px; }
+  .jrnl-cal-nav { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .jrnl-cal-nav button { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); padding: 4px 10px; cursor: pointer; font-family: inherit; }
+  .jrnl-cal-nav span { font-size: 0.9rem; font-weight: 600; min-width: 160px; text-align: center; }
+  .jrnl-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+  .jrnl-cal-hdr { font-size: 0.68rem; color: var(--dim); text-align: center; padding: 6px 0; font-weight: 600; }
+  .jrnl-cal-day { min-height: 80px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 4px; cursor: pointer; position: relative; }
+  .jrnl-cal-day:hover { border-color: var(--accent); }
+  .jrnl-cal-day.other { opacity: 0.3; }
+  .jrnl-cal-day.today { border-color: var(--accent); }
+  .jrnl-cal-day .day-num { font-size: 0.7rem; color: var(--dim); margin-bottom: 2px; }
+  .jrnl-cal-day .day-dots { display: flex; flex-direction: column; gap: 2px; }
+  .jrnl-cal-day .day-entry { font-size: 0.6rem; color: var(--fg); padding: 1px 4px; background: rgba(63,185,80,0.1); border-radius: 3px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  /* Media gallery */
+  .jrnl-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; padding: 16px; }
+  .jrnl-gallery-item { aspect-ratio: 1; border-radius: 8px; overflow: hidden; cursor: pointer; position: relative; border: 1px solid var(--border); }
+  .jrnl-gallery-item img { width: 100%; height: 100%; object-fit: cover; }
+  .jrnl-gallery-item .caption { position: absolute; bottom: 0; left: 0; right: 0; padding: 6px 8px; background: linear-gradient(transparent, rgba(0,0,0,0.7)); color: #fff; font-size: 0.68rem; }
+  /* Map view */
+  .jrnl-map-container { width: 100%; height: 100%; }
+  @media (max-width: 600px) {
+    #journal-view { height: calc(100dvh - 122px); flex-direction: column; }
+    .jrnl-sidebar { width: 100%; min-width: 0; max-height: 40vh; border-right: none; border-bottom: 1px solid var(--border); }
+    .jrnl-cal-day { min-height: 50px; }
+    .jrnl-gallery { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+  }
+
 </style>
 </head>
 <body>
@@ -8052,6 +8224,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <button id="tab-metrics" onclick="switchView('metrics')">Metrics</button>
   <button id="tab-torrents" onclick="switchView('torrents')">Torrents</button>
   <button id="tab-terminal" onclick="switchView('terminal')">Terminal</button>
+  <button id="tab-graph" onclick="switchView('graph')">Graph</button>
+  <button id="tab-journal" onclick="switchView('journal')">Journal</button>
 </div>
 <div class="tab-customize-wrap">
   <button class="tab-customize-btn" onclick="event.stopPropagation();toggleTabCustomizer()" title="Show/hide tabs">&#x229E;</button>
@@ -8548,6 +8722,76 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <div id="term-container" style="flex:1;min-height:0;background:#0d1117;border-radius:6px;overflow:hidden;position:relative;">
     <div id="term-placeholder" style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--dim);font-size:0.9rem;">
       Enter a host above and click Connect, or leave blank for a local shell
+    </div>
+  </div>
+</div>
+
+<div id="graph-view" style="display:none;flex-direction:column;flex:1;min-height:0;">
+  <div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap;">
+    <span style="font-size:0.78rem;color:var(--dim);white-space:nowrap;">Vault:</span>
+    <input id="graph-vault-path" type="text" placeholder="/path/to/obsidian/vault" style="flex:1;min-width:180px;font-size:0.78rem;padding:4px 8px;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--fg);font-family:inherit;">
+    <button onclick="_graphImportVault()" style="padding:4px 12px;background:var(--accent);color:#fff;border:none;border-radius:4px;font-size:0.78rem;cursor:pointer;white-space:nowrap;">Import</button>
+    <span id="graph-stats" style="font-size:0.68rem;color:var(--dim);"></span>
+  </div>
+  <div style="position:relative;flex:1;min-height:0;">
+  <div class="graph-controls">
+    <button onclick="_graphZoom(1.2)" title="Zoom in">+</button>
+    <button onclick="_graphZoom(0.8)" title="Zoom out">&minus;</button>
+    <button onclick="_graphResetLayout()" title="Reset layout">&#x21bb;</button>
+    <button id="graph-edges-toggle" onclick="_graphToggleAllEdges()" title="Toggle all connections">&#x2731;</button>
+  </div>
+  <div class="graph-filters" id="graph-filters"></div>
+  <div class="graph-canvas" id="graph-canvas">
+    <svg id="graph-svg" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;">
+      <defs>
+        <marker id="graph-arrow" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="8" markerHeight="6" orient="auto-start-reverse">
+          <path d="M0,0 L10,3 L0,6 Z" fill="context-stroke" opacity="0.6"/>
+        </marker>
+      </defs>
+      <g id="graph-edges-g"></g>
+    </svg>
+    <div id="graph-nodes-container" style="position:absolute;top:0;left:0;width:0;height:0;"></div>
+  </div>
+  <div class="graph-side-panel" id="graph-side-panel">
+    <div class="graph-side-header">
+      <span id="graph-side-title" style="flex:1;font-weight:600;font-size:0.9rem;"></span>
+      <span id="graph-side-badge" class="badge"></span>
+      <button onclick="_graphClosePanel()" style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:1.1rem;">&times;</button>
+    </div>
+    <div class="graph-side-body" id="graph-side-body"></div>
+    <div class="graph-side-links" id="graph-side-links"></div>
+  </div>
+  </div>
+</div>
+
+<!-- Journal -->
+<div id="journal-view" style="display:none;">
+  <div class="jrnl-sidebar">
+    <div class="jrnl-sidebar-hdr">
+      <span style="font-weight:600;font-size:0.85rem;">Journal</span>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <button class="jrnl-new-btn" onclick="_jrnlNew()">+ New</button>
+        <button style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 7px;cursor:pointer;color:var(--dim);font-size:0.7rem;" onclick="_jrnlShowConfig()" title="Configure prompts">&#9881;</button>
+      </div>
+    </div>
+    <div class="jrnl-search-wrap">
+      <input type="search" id="jrnl-search" placeholder="Search entries..." oninput="_jrnlSearch(this.value)" autocomplete="off">
+    </div>
+    <div class="jrnl-tags-bar" id="jrnl-tags-bar"></div>
+    <div class="jrnl-entry-list" id="jrnl-entry-list"></div>
+  </div>
+  <div class="jrnl-main">
+    <div class="jrnl-sub-tabs">
+      <button class="jrnl-sub-tab active" data-view="list" onclick="_jrnlSwitchSub('list')">List</button>
+      <button class="jrnl-sub-tab" data-view="calendar" onclick="_jrnlSwitchSub('calendar')">Calendar</button>
+      <button class="jrnl-sub-tab" data-view="media" onclick="_jrnlSwitchSub('media')">Media</button>
+      <button class="jrnl-sub-tab" data-view="map" onclick="_jrnlSwitchSub('map')">Map</button>
+    </div>
+    <div class="jrnl-content" id="jrnl-content">
+      <div id="jrnl-list-pane"><div class="jrnl-editor-empty">Select an entry or create a new one</div></div>
+      <div id="jrnl-calendar-pane" style="display:none;"></div>
+      <div id="jrnl-media-pane" style="display:none;"></div>
+      <div id="jrnl-map-pane" style="display:none;"><div class="jrnl-map-container" id="jrnl-map-container"></div></div>
     </div>
   </div>
 </div>
@@ -10656,6 +10900,8 @@ const ALL_TABS = [
   { id: 'metrics',       label: 'Metrics' },
   { id: 'torrents',      label: 'Torrents' },
   { id: 'terminal',      label: 'Terminal' },
+  { id: 'graph',         label: 'Graph' },
+  { id: 'journal',       label: 'Journal' },
 ];
 
 let hiddenTabs = (function() {
@@ -10733,8 +10979,8 @@ function _renderTabCustomizerMenu() {
     </label>`;
   }).join('');
   // Presets section
-  html += '<div class="tab-preset-section" onclick="event.stopPropagation()" style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px;">';
-  html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:2px 0;">';
+  html += '<div class="tab-preset-section" onclick="event.stopPropagation()" style="border-top:1px solid var(--border);margin-top:6px;padding:6px 14px 4px;">';
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;">';
   html += '<span style="font-size:0.75rem;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:0.05em;">Presets</span>';
   html += '<button onclick="saveLayoutPreset()" style="font-size:0.75rem;color:var(--accent);background:none;border:none;cursor:pointer;padding:2px 4px;">+ Save current</button>';
   html += '</div>';
@@ -15124,6 +15370,8 @@ function switchView(view) {
   document.getElementById('metrics-view').style.display = view === 'metrics' ? 'flex' : 'none';
   document.getElementById('torrents-view').style.display = view === 'torrents' ? 'flex' : 'none';
   document.getElementById('terminal-view').style.display = view === 'terminal' ? 'flex' : 'none';
+  document.getElementById('graph-view').style.display = view === 'graph' ? 'flex' : 'none';
+  document.getElementById('journal-view').style.display = view === 'journal' ? 'flex' : 'none';
   document.getElementById('tab-sessions').classList.toggle('active', view === 'sessions');
   document.getElementById('tab-board').classList.toggle('active', view === 'board');
   document.getElementById('tab-notifications').classList.toggle('active', view === 'notifications');
@@ -15136,11 +15384,15 @@ function switchView(view) {
   document.getElementById('tab-metrics').classList.toggle('active', view === 'metrics');
   document.getElementById('tab-torrents').classList.toggle('active', view === 'torrents');
   document.getElementById('tab-terminal').classList.toggle('active', view === 'terminal');
+  document.getElementById('tab-graph').classList.toggle('active', view === 'graph');
+  document.getElementById('tab-journal').classList.toggle('active', view === 'journal');
   if (view === 'torrents') _torrentLoad();
   if (view === 'terminal') _termInit();
+  if (view === 'graph') _graphInit();
   if (view === 'crm') { _crmDirty = false; _crmLoad(); _crmApplySidebarState(); } // always refresh on tab switch
   if (view === 'map') { _mapLoad(); _mapInit(); }
   if (view === 'metrics') { _metricsLoad(); _metricsApplySidebarState(); } // always refresh on tab switch
+  if (view === 'journal') _journalInit();
   if (view === 'files') loadFiles(_filesPath);
   else {
     try { if (location.hash.startsWith('#path=')) history.replaceState({}, '', location.pathname); } catch(e) {}
@@ -18320,6 +18572,8 @@ function connectSSE() {
           } else if (key === 'crm') {
             if (activeView === 'crm') _crmLoad();
             else _crmDirty = true;
+          } else if (key === 'journal') {
+            if (activeView === 'journal') _journalLoad();
           }
         }
       }
@@ -18638,7 +18892,7 @@ function applyBranding(d) {
   const iconEl = document.getElementById('brand-icon-header');
   if (iconEl) {
     if (d.icon_url) {
-      iconEl.innerHTML = '<img src="' + esc(API + d.icon_url) + '" style="width:22px;height:22px;border-radius:4px;object-fit:cover;">';
+      iconEl.innerHTML = '<img src="' + esc(API + d.icon_url) + '?v=' + Date.now() + '" style="width:22px;height:22px;border-radius:4px;object-fit:cover;">';
     } else {
       iconEl.innerHTML = '';
     }
@@ -18653,9 +18907,9 @@ function applyBranding(d) {
   const aboutPreview = document.getElementById('about-brand-preview');
   if (aboutPreview) {
     if (d.logo_url) {
-      aboutPreview.innerHTML = '<img src="' + esc(API + d.logo_url) + '" style="max-width:180px;max-height:48px;border-radius:4px;margin-bottom:4px;">';
+      aboutPreview.innerHTML = '<img src="' + esc(API + d.logo_url) + '?v=' + Date.now() + '" style="max-width:180px;max-height:48px;border-radius:4px;margin-bottom:4px;">';
     } else if (d.icon_url) {
-      aboutPreview.innerHTML = '<img src="' + esc(API + d.icon_url) + '" style="width:48px;height:48px;border-radius:8px;margin-bottom:4px;">';
+      aboutPreview.innerHTML = '<img src="' + esc(API + d.icon_url) + '?v=' + Date.now() + '" style="width:48px;height:48px;border-radius:8px;margin-bottom:4px;">';
     } else {
       aboutPreview.innerHTML = '';
     }
@@ -18665,10 +18919,11 @@ function applyBranding(d) {
   document.documentElement.style.setProperty('--accent', color);
   // Favicon
   if (d.icon_url) {
+    const _v = '?v=' + Date.now();
     let fav = document.querySelector('link[rel="icon"]');
-    if (fav) fav.href = API + d.icon_url;
+    if (fav) fav.href = API + d.icon_url + _v;
     let apple = document.querySelector('link[rel="apple-touch-icon"]');
-    if (apple) apple.href = API + d.icon_url;
+    if (apple) apple.href = API + d.icon_url + _v;
   }
   // Populate editor fields
   const ni = document.getElementById('brand-name-input');
@@ -22144,6 +22399,948 @@ async function _gmailSubmitCode(account) {
     await showAlert('Connection failed: ' + (data?.error || 'unknown'));
   }
 }
+
+// ═══════════════════════════════════════════
+// GRAPH / MIND MAP TAB
+// ═══════════════════════════════════════════
+let _graphData = { nodes: [], edges: [] };
+let _graphInited = false;
+let _graphTransform = { x: 0, y: 0, scale: 1 };
+let _graphShowAllEdges = false;
+let _graphSelectedNode = null;
+let _graphHoveredNode = null;
+let _graphActiveFilters = new Set();
+let _graphSimRunning = false;
+const _GRAPH_FOLDER_COLORS = {
+  'Memories': '#C97B3A',
+  'Patterns': '#4A6FA5',
+  'Beliefs': '#A54A4A',
+  'Behaviors': '#4A9A6F',
+  'Relationship - Her': '#7A4AA5',
+  'root': '#888888',
+};
+
+let _graphVaultPath = localStorage.getItem('amux_graph_vault') || '';
+
+async function _graphInit() {
+  if (_graphInited) return;
+  _graphInited = true;
+  const inp = document.getElementById('graph-vault-path');
+  if (inp && _graphVaultPath) inp.value = _graphVaultPath;
+  await _graphLoad();
+}
+
+async function _graphLoad() {
+  try {
+    const r = await fetch(API + '/api/graph/default', { headers: _authHeaders() });
+    const d = await r.json();
+    _graphData = d;
+    _graphRestorePositions();
+    _graphRender();
+    _graphBuildFilters();
+    _graphUpdateStats();
+    if (!_graphData.nodes.some(n => n.pinned)) _graphRunForce();
+  } catch(e) { console.error('graph load', e); }
+}
+
+function _graphUpdateStats() {
+  const el = document.getElementById('graph-stats');
+  if (el) el.textContent = `${_graphData.nodes.length} nodes, ${_graphData.edges.length} edges`;
+}
+
+async function _graphImportVault() {
+  const inp = document.getElementById('graph-vault-path');
+  const path = inp ? inp.value.trim() : '';
+  if (!path) return;
+  _graphVaultPath = path;
+  localStorage.setItem('amux_graph_vault', path);
+  try {
+    const r = await fetch(API + '/api/graph/default/import-vault', {
+      method: 'POST', headers: _authHeaders({'Content-Type':'application/json'}),
+      body: JSON.stringify({ path })
+    });
+    const d = await r.json();
+    if (d.error) { showToast(d.error, 'error'); return; }
+    showToast(`Imported ${d.nodes} nodes, ${d.edges} edges`);
+    localStorage.removeItem('amux_graph_positions');
+    _graphInited = false;
+    await _graphInit();
+  } catch(e) { showToast('Import failed', 'error'); }
+}
+
+function _graphBuildFilters() {
+  const el = document.getElementById('graph-filters');
+  const folders = [...new Set(_graphData.nodes.map(n => n.folder))].sort();
+  _graphActiveFilters = new Set(folders);
+  el.innerHTML = folders.map(f => {
+    const c = _GRAPH_FOLDER_COLORS[f] || '#888';
+    return `<button class="graph-filter-btn active" data-folder="${f}" onclick="_graphToggleFilter('${f}',this)" style="border-color:${c};">${f}</button>`;
+  }).join('');
+}
+
+function _graphToggleFilter(folder, btn) {
+  if (_graphActiveFilters.has(folder)) {
+    _graphActiveFilters.delete(folder);
+    btn.classList.remove('active');
+  } else {
+    _graphActiveFilters.add(folder);
+    btn.classList.add('active');
+  }
+  _graphApplyVisibility();
+}
+
+function _graphApplyVisibility() {
+  document.querySelectorAll('.graph-node').forEach(el => {
+    const f = el.dataset.folder;
+    el.style.display = _graphActiveFilters.has(f) ? '' : 'none';
+  });
+  _graphRenderEdges();
+}
+
+function _graphRender() {
+  const container = document.getElementById('graph-nodes-container');
+  container.innerHTML = '';
+  _graphData.nodes.forEach(n => {
+    const el = document.createElement('div');
+    el.className = 'graph-node';
+    el.dataset.id = n.id;
+    el.dataset.folder = n.folder;
+    const c = _GRAPH_FOLDER_COLORS[n.folder] || '#888';
+    el.style.background = c + '18';
+    el.style.color = c;
+    el.style.borderColor = c + '40';
+    // Size by connection count
+    const linkCount = _graphData.edges.filter(e => e.source === n.id || e.target === n.id).length;
+    const scale = 0.85 + Math.min(linkCount, 8) * 0.06;
+    el.style.fontSize = (0.78 * scale) + 'rem';
+    el.style.padding = `${Math.round(8*scale)}px ${Math.round(14*scale)}px`;
+    el.textContent = n.label;
+    el.style.left = (n.x || 0) + 'px';
+    el.style.top = (n.y || 0) + 'px';
+    el.addEventListener('mousedown', (e) => _graphStartDrag(e, n));
+    el.addEventListener('touchstart', (e) => { if (e.touches.length===1) { e.preventDefault(); const t=e.touches[0]; _graphStartDrag({clientX:t.clientX,clientY:t.clientY,button:0,preventDefault:()=>{},stopPropagation:()=>{},currentTarget:el}, n); } }, {passive:false});
+    el.addEventListener('dblclick', () => _graphOpenPanel(n));
+    el.addEventListener('mouseenter', () => { _graphHoveredNode = n.id; _graphHighlight(n.id); });
+    el.addEventListener('mouseleave', () => { _graphHoveredNode = null; _graphClearHighlight(); });
+    container.appendChild(el);
+  });
+  _graphRenderEdges();
+  _graphApplyTransform();
+}
+
+function _graphRenderEdges() {
+  const g = document.getElementById('graph-edges-g');
+  g.innerHTML = '';
+  const visible = new Set([..._graphActiveFilters]);
+  const nodeMap = {};
+  _graphData.nodes.forEach(n => { nodeMap[n.id] = n; });
+  _graphData.edges.forEach(e => {
+    const src = nodeMap[e.source], tgt = nodeMap[e.target];
+    if (!src || !tgt) return;
+    if (!visible.has(src.folder) || !visible.has(tgt.folder)) return;
+    const show = _graphShowAllEdges || _graphHoveredNode === e.source || _graphHoveredNode === e.target || _graphSelectedNode === e.source || _graphSelectedNode === e.target;
+    const c = _GRAPH_FOLDER_COLORS[src.folder] || '#888';
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    const x1 = (src.x||0)+50, y1 = (src.y||0)+16, x2 = (tgt.x||0)+50, y2 = (tgt.y||0)+16;
+    const mx = (x1+x2)/2, my = (y1+y2)/2 - 30;
+    path.setAttribute('d', `M${x1},${y1} Q${mx},${my} ${x2},${y2}`);
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', c);
+    path.setAttribute('stroke-width', '1.5');
+    path.setAttribute('stroke-opacity', show ? '0.5' : '0.08');
+    path.setAttribute('marker-end', 'url(#graph-arrow)');
+    path.classList.add('graph-edge');
+    if (!show) path.classList.add('dimmed');
+    g.appendChild(path);
+  });
+}
+
+function _graphHighlight(nodeId) {
+  const connected = new Set([nodeId]);
+  _graphData.edges.forEach(e => {
+    if (e.source === nodeId) connected.add(e.target);
+    if (e.target === nodeId) connected.add(e.source);
+  });
+  document.querySelectorAll('.graph-node').forEach(el => {
+    el.classList.toggle('dimmed', !connected.has(el.dataset.id));
+  });
+  _graphRenderEdges();
+}
+
+function _graphClearHighlight() {
+  if (_graphSelectedNode) { _graphHighlight(_graphSelectedNode); return; }
+  document.querySelectorAll('.graph-node').forEach(el => el.classList.remove('dimmed'));
+  _graphRenderEdges();
+}
+
+// ── Drag nodes ──
+let _graphDragState = null;
+function _graphStartDrag(e, node) {
+  if (e.button !== 0) return;
+  e.preventDefault(); e.stopPropagation();
+  const el = e.currentTarget;
+  el.classList.add('dragging');
+  const startX = e.clientX, startY = e.clientY;
+  const origX = node.x || 0, origY = node.y || 0;
+  _graphDragState = { node, el, startX, startY, origX, origY, moved: false };
+  document.addEventListener('mousemove', _graphOnDrag);
+  document.addEventListener('mouseup', _graphEndDrag);
+  document.addEventListener('touchmove', (e) => { if (_graphDragState) { e.preventDefault(); const t=e.touches[0]; _graphOnDrag({clientX:t.clientX,clientY:t.clientY}); }}, {passive:false});
+  document.addEventListener('touchend', (e) => { if (_graphDragState) _graphEndDrag(e); });
+}
+function _graphOnDrag(e) {
+  const s = _graphDragState; if (!s) return;
+  const dx = (e.clientX - s.startX) / _graphTransform.scale;
+  const dy = (e.clientY - s.startY) / _graphTransform.scale;
+  if (Math.abs(dx) > 2 || Math.abs(dy) > 2) s.moved = true;
+  s.node.x = s.origX + dx;
+  s.node.y = s.origY + dy;
+  s.el.style.left = s.node.x + 'px';
+  s.el.style.top = s.node.y + 'px';
+  _graphRenderEdges();
+}
+function _graphEndDrag(e) {
+  document.removeEventListener('mousemove', _graphOnDrag);
+  document.removeEventListener('mouseup', _graphEndDrag);
+  const s = _graphDragState; if (!s) return;
+  s.el.classList.remove('dragging');
+  if (s.moved) {
+    s.node.pinned = 1;
+    _graphSavePositions();
+    // Update server
+    fetch(API + '/api/graph/default/nodes/' + encodeURIComponent(s.node.id), {
+      method: 'PATCH', headers: _authHeaders({'Content-Type':'application/json'}),
+      body: JSON.stringify({ x: s.node.x, y: s.node.y, pinned: 1 })
+    }).catch(()=>{});
+  } else {
+    // Click without drag = open panel (or close if same node)
+    if (_graphSelectedNode === s.node.id) {
+      _graphClosePanel();
+    } else {
+      _graphOpenPanel(s.node);
+    }
+  }
+  _graphDragState = null;
+}
+
+// ── Pan & Zoom ──
+function _graphApplyTransform() {
+  const t = _graphTransform;
+  const container = document.getElementById('graph-nodes-container');
+  const svg = document.getElementById('graph-svg');
+  const val = `translate(${t.x}px, ${t.y}px) scale(${t.scale})`;
+  container.style.transform = val;
+  container.style.transformOrigin = '0 0';
+  svg.style.transform = val;
+  svg.style.transformOrigin = '0 0';
+}
+(function() {
+  let _panState = null;
+  document.addEventListener('DOMContentLoaded', () => {
+    const canvas = document.getElementById('graph-canvas');
+    if (!canvas) return;
+    canvas.addEventListener('mousedown', (e) => {
+      if (e.target !== canvas && !e.target.closest('#graph-svg')) return;
+      if (e.button !== 0) return;
+      canvas.classList.add('grabbing');
+      _panState = { sx: e.clientX, sy: e.clientY, ox: _graphTransform.x, oy: _graphTransform.y };
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!_panState) return;
+      _graphTransform.x = _panState.ox + (e.clientX - _panState.sx);
+      _graphTransform.y = _panState.oy + (e.clientY - _panState.sy);
+      _graphApplyTransform();
+    });
+    document.addEventListener('mouseup', () => {
+      if (_panState) { _panState = null; canvas.classList.remove('grabbing'); }
+    });
+    canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.08 : 0.92;
+      _graphZoomAt(e.clientX, e.clientY, factor);
+    }, { passive: false });
+    // Touch support for mobile
+    let _touchState = null;
+    canvas.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 1) {
+        const t = e.touches[0];
+        _touchState = { sx: t.clientX, sy: t.clientY, ox: _graphTransform.x, oy: _graphTransform.y, type: 'pan' };
+      } else if (e.touches.length === 2) {
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        _touchState = { dist: Math.sqrt(dx*dx+dy*dy), scale: _graphTransform.scale, type: 'pinch' };
+      }
+    }, { passive: true });
+    canvas.addEventListener('touchmove', (e) => {
+      if (!_touchState) return;
+      if (_touchState.type === 'pan' && e.touches.length === 1) {
+        e.preventDefault();
+        const t = e.touches[0];
+        _graphTransform.x = _touchState.ox + (t.clientX - _touchState.sx);
+        _graphTransform.y = _touchState.oy + (t.clientY - _touchState.sy);
+        _graphApplyTransform();
+      } else if (_touchState.type === 'pinch' && e.touches.length === 2) {
+        e.preventDefault();
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        const dist = Math.sqrt(dx*dx+dy*dy);
+        const newScale = Math.max(0.1, Math.min(5, _touchState.scale * (dist / _touchState.dist)));
+        _graphTransform.scale = newScale;
+        _graphApplyTransform();
+      }
+    }, { passive: false });
+    canvas.addEventListener('touchend', () => { _touchState = null; });
+  });
+})();
+
+function _graphZoom(factor) {
+  const canvas = document.getElementById('graph-canvas');
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  _graphZoomAt(rect.left + rect.width/2, rect.top + rect.height/2, factor);
+}
+function _graphZoomAt(cx, cy, factor) {
+  const t = _graphTransform;
+  const newScale = Math.max(0.1, Math.min(5, t.scale * factor));
+  const ratio = newScale / t.scale;
+  t.x = cx - ratio * (cx - t.x);
+  t.y = cy - ratio * (cy - t.y);
+  t.scale = newScale;
+  _graphApplyTransform();
+}
+
+// ── Force simulation (simple, no D3 dependency) ──
+function _graphRunForce() {
+  if (_graphSimRunning) return;
+  _graphSimRunning = true;
+  const nodes = _graphData.nodes;
+  const edges = _graphData.edges;
+  // Init positions for unpositioned nodes
+  const canvas = document.getElementById('graph-canvas');
+  const rect = canvas ? canvas.getBoundingClientRect() : { width: 800, height: 600 };
+  const cx = rect.width / 2, cy = rect.height / 2;
+  nodes.forEach((n, i) => {
+    if (n.x == null) { n.x = cx + (Math.random()-0.5)*900; n.y = cy + (Math.random()-0.5)*700; }
+    n.vx = 0; n.vy = 0;
+  });
+  const nodeMap = {}; nodes.forEach(n => nodeMap[n.id] = n);
+  let iter = 0, maxIter = 300, alpha = 1;
+  function tick() {
+    if (iter++ >= maxIter || alpha < 0.005) { _graphSimRunning = false; _graphSavePositions(); _graphFitView(); return; }
+    alpha *= 0.97;
+    // Repulsion — Barnes-Hut–style with minimum distance
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i+1; j < nodes.length; j++) {
+        const a = nodes[i], b = nodes[j];
+        let dx = (b.x||0) - (a.x||0), dy = (b.y||0) - (a.y||0);
+        let dist = Math.sqrt(dx*dx + dy*dy);
+        if (dist < 10) { dist = 10; dx = (Math.random()-0.5)*20; dy = (Math.random()-0.5)*20; }
+        // Push apart: constant force at close range, 1/dist at long range
+        const f = alpha * Math.max(50/dist, 2000/(dist*dist));
+        const fx = (dx/dist) * f, fy = (dy/dist) * f;
+        if (!a.pinned) { a.vx -= fx; a.vy -= fy; }
+        if (!b.pinned) { b.vx += fx; b.vy += fy; }
+      }
+    }
+    // Attraction (links) — pull connected nodes together
+    edges.forEach(e => {
+      const a = nodeMap[e.source], b = nodeMap[e.target];
+      if (!a || !b) return;
+      let dx = (b.x||0) - (a.x||0), dy = (b.y||0) - (a.y||0);
+      let dist = Math.sqrt(dx*dx + dy*dy) || 1;
+      const idealLen = 180;
+      const force = (dist - idealLen) * 0.05 * alpha;
+      const fx = dx/dist * force, fy = dy/dist * force;
+      if (!a.pinned) { a.vx += fx; a.vy += fy; }
+      if (!b.pinned) { b.vx -= fx; b.vy -= fy; }
+    });
+    // Center gravity (very mild)
+    nodes.forEach(n => {
+      if (n.pinned) return;
+      n.vx += (cx - (n.x||0)) * 0.0005 * alpha;
+      n.vy += (cy - (n.y||0)) * 0.0005 * alpha;
+    });
+    // Apply velocity
+    nodes.forEach(n => {
+      if (n.pinned) return;
+      n.vx *= 0.5; n.vy *= 0.5;
+      // Clamp velocity to prevent explosion
+      const maxV = 50;
+      if (n.vx > maxV) n.vx = maxV; if (n.vx < -maxV) n.vx = -maxV;
+      if (n.vy > maxV) n.vy = maxV; if (n.vy < -maxV) n.vy = -maxV;
+      n.x = (n.x||0) + n.vx;
+      n.y = (n.y||0) + n.vy;
+    });
+    // Update DOM
+    document.querySelectorAll('.graph-node').forEach(el => {
+      const n = nodeMap[el.dataset.id];
+      if (n) { el.style.left = n.x + 'px'; el.style.top = n.y + 'px'; }
+    });
+    _graphRenderEdges();
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+function _graphResetLayout() {
+  _graphData.nodes.forEach(n => { n.pinned = 0; n.x = null; n.y = null; });
+  _graphSavePositions();
+  _graphRender();
+  _graphRunForce();
+}
+
+function _graphFitView() {
+  if (!_graphData.nodes.length) return;
+  const canvas = document.getElementById('graph-canvas');
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  _graphData.nodes.forEach(n => {
+    if (!_graphActiveFilters.has(n.folder)) return;
+    const x = n.x || 0, y = n.y || 0;
+    if (x < minX) minX = x; if (x > maxX) maxX = x;
+    if (y < minY) minY = y; if (y > maxY) maxY = y;
+  });
+  if (!isFinite(minX)) return;
+  const pad = 100; // px padding
+  const gw = (maxX - minX) + pad * 2 + 120; // node width ~120
+  const gh = (maxY - minY) + pad * 2 + 40;  // node height ~40
+  const scale = Math.min(rect.width / gw, rect.height / gh, 1.5);
+  const gcx = (minX + maxX) / 2 + 60;
+  const gcy = (minY + maxY) / 2 + 20;
+  _graphTransform.scale = scale;
+  _graphTransform.x = rect.width / 2 - gcx * scale;
+  _graphTransform.y = rect.height / 2 - gcy * scale;
+  _graphApplyTransform();
+}
+
+function _graphToggleAllEdges() {
+  _graphShowAllEdges = !_graphShowAllEdges;
+  document.getElementById('graph-edges-toggle').classList.toggle('active', _graphShowAllEdges);
+  document.getElementById('graph-edges-toggle').style.background = _graphShowAllEdges ? 'var(--accent)' : '';
+  document.getElementById('graph-edges-toggle').style.color = _graphShowAllEdges ? '#fff' : '';
+  _graphRenderEdges();
+}
+
+// ── Side panel ──
+function _graphOpenPanel(node) {
+  _graphSelectedNode = node.id;
+  document.querySelectorAll('.graph-node').forEach(el => el.classList.toggle('selected', el.dataset.id === node.id));
+  _graphHighlight(node.id);
+  const panel = document.getElementById('graph-side-panel');
+  document.getElementById('graph-side-title').textContent = node.label;
+  const badge = document.getElementById('graph-side-badge');
+  const c = _GRAPH_FOLDER_COLORS[node.folder] || '#888';
+  badge.textContent = node.folder;
+  badge.style.background = c;
+  // Source file path
+  const body = document.getElementById('graph-side-body');
+  let html = '';
+  if (node.source_path) {
+    html += `<div style="font-size:0.68rem;color:var(--dim);margin-bottom:10px;word-break:break-all;font-family:monospace;padding:4px 8px;background:var(--bg);border-radius:4px;">${node.source_path}</div>`;
+  }
+  // Render markdown body
+  if (typeof marked !== 'undefined' && node.body) {
+    html += marked.parse(node.body);
+  } else {
+    html += '<p>' + (node.body || '(no content)') + '</p>';
+  }
+  body.innerHTML = html;
+  // Linked nodes
+  const links = document.getElementById('graph-side-links');
+  const connected = [];
+  _graphData.edges.forEach(e => {
+    if (e.source === node.id) connected.push(e.target);
+    if (e.target === node.id) connected.push(e.source);
+  });
+  const nodeMap = {}; _graphData.nodes.forEach(n => nodeMap[n.id] = n);
+  links.innerHTML = connected.filter(id => nodeMap[id]).map(id => {
+    const n = nodeMap[id];
+    const cc = _GRAPH_FOLDER_COLORS[n.folder] || '#888';
+    return `<span class="chip" style="border-color:${cc}40;color:${cc}" onclick="_graphFocusNode('${n.id}')">${n.label}</span>`;
+  }).join('');
+  panel.classList.add('open');
+}
+function _graphClosePanel() {
+  document.getElementById('graph-side-panel').classList.remove('open');
+  _graphSelectedNode = null;
+  document.querySelectorAll('.graph-node').forEach(el => el.classList.remove('selected', 'dimmed'));
+  _graphRenderEdges();
+}
+function _graphFocusNode(id) {
+  const nodeMap = {}; _graphData.nodes.forEach(n => nodeMap[n.id] = n);
+  const n = nodeMap[id]; if (!n) return;
+  _graphOpenPanel(n);
+  // Pan to center the node
+  const canvas = document.getElementById('graph-canvas');
+  const rect = canvas.getBoundingClientRect();
+  _graphTransform.x = rect.width/2 - (n.x||0)*_graphTransform.scale - 50;
+  _graphTransform.y = rect.height/2 - (n.y||0)*_graphTransform.scale - 16;
+  _graphApplyTransform();
+}
+
+// ── Persist positions in localStorage ──
+function _graphSavePositions() {
+  const pos = {};
+  _graphData.nodes.forEach(n => { pos[n.id] = { x: n.x, y: n.y, pinned: n.pinned }; });
+  try { localStorage.setItem('amux_graph_positions', JSON.stringify(pos)); } catch(e) {}
+}
+function _graphRestorePositions() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('amux_graph_positions') || '{}');
+    _graphData.nodes.forEach(n => {
+      if (saved[n.id]) { n.x = saved[n.id].x; n.y = saved[n.id].y; n.pinned = saved[n.id].pinned || 0; }
+    });
+  } catch(e) {}
+}
+
+// ── Journal ──────────────────────────────────────────────────────────────────
+let _jrnlEntries = [];
+let _jrnlAllEntries = [];
+let _jrnlActiveId = null;
+let _jrnlInited = false;
+let _jrnlSubView = 'list';
+let _jrnlSearchQ = '';
+let _jrnlActiveTag = '';
+let _jrnlCalMonth = new Date().getMonth();
+let _jrnlCalYear = new Date().getFullYear();
+let _jrnlConfig = { prompt1: '', prompt2: '', prompt3: '' };
+let _jrnlMap = null;
+let _jrnlMarkers = null;
+
+async function _journalInit() {
+  if (!_jrnlInited) {
+    _jrnlInited = true;
+    try {
+      const r = await fetch('/api/journal/config');
+      if (r.ok) _jrnlConfig = await r.json();
+    } catch(e) {}
+  }
+  await _journalLoad();
+}
+
+async function _journalLoad() {
+  try {
+    let url = '/api/journal';
+    const params = [];
+    if (_jrnlSearchQ) params.push('q=' + encodeURIComponent(_jrnlSearchQ));
+    if (_jrnlActiveTag) params.push('tag=' + encodeURIComponent(_jrnlActiveTag));
+    if (params.length) url += '?' + params.join('&');
+    const r = await fetch(url);
+    if (!r.ok) return;
+    _jrnlEntries = await r.json();
+    // Also load all entries for calendar/map (unfiltered)
+    if (_jrnlSearchQ || _jrnlActiveTag) {
+      const r2 = await fetch('/api/journal');
+      if (r2.ok) _jrnlAllEntries = await r2.json();
+    } else {
+      _jrnlAllEntries = _jrnlEntries;
+    }
+    _jrnlRenderSidebar();
+    _jrnlRenderTags();
+    _jrnlRenderCurrentView();
+  } catch(e) { console.error('journal load:', e); }
+}
+
+function _jrnlRenderSidebar() {
+  const list = document.getElementById('jrnl-entry-list');
+  if (!_jrnlEntries.length) {
+    list.innerHTML = '<div style="padding:20px;text-align:center;color:var(--dim);font-size:0.82rem;">No entries yet</div>';
+    return;
+  }
+  let html = '';
+  let lastMonth = '';
+  for (const e of _jrnlEntries) {
+    const d = new Date(e.date + 'T12:00:00');
+    const monthKey = d.toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
+    if (monthKey !== lastMonth) {
+      lastMonth = monthKey;
+      html += '<div style="padding:6px 12px;font-size:0.68rem;color:var(--dim);font-weight:600;background:var(--bg);position:sticky;top:0;">' + esc(monthKey) + '</div>';
+    }
+    const preview = (e.text || e.prompt1 || e.prompt2 || e.prompt3 || '').substring(0, 120);
+    const dateStr = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    html += '<div class="jrnl-entry-card' + (e.id === _jrnlActiveId ? ' active' : '') + '" onclick="_jrnlSelect(\'' + e.id + '\')">';
+    html += '<div class="jrnl-entry-date">' + esc(dateStr) + (e.starred ? ' &#9733;' : '') + '</div>';
+    html += '<div class="jrnl-entry-preview">' + esc(preview) + '</div>';
+    html += '<div class="jrnl-entry-meta">';
+    if (e.place_name) html += '<span class="loc">&#128205; ' + esc(e.place_name.split(',')[0]) + '</span>';
+    if (e.tags) for (const t of e.tags.split(',').filter(Boolean).slice(0, 3)) html += '<span class="tag">' + esc(t) + '</span>';
+    if (e.media && e.media.length) html += '<span class="media-count">&#128247; ' + e.media.length + '</span>';
+    html += '</div></div>';
+  }
+  list.innerHTML = html;
+}
+
+function _jrnlRenderTags() {
+  fetch('/api/journal/tags').then(r => r.json()).then(tags => {
+    const bar = document.getElementById('jrnl-tags-bar');
+    const sorted = Object.entries(tags).sort((a, b) => b[1] - a[1]);
+    if (!sorted.length) { bar.innerHTML = ''; return; }
+    bar.innerHTML = '<span class="jrnl-tag-chip' + (!_jrnlActiveTag ? ' active' : '') + '" onclick="_jrnlFilterTag(\'\')">All</span>' +
+      sorted.map(([t, c]) => '<span class="jrnl-tag-chip' + (t === _jrnlActiveTag ? ' active' : '') + '" onclick="_jrnlFilterTag(\'' + esc(t) + '\')">' + esc(t) + ' (' + c + ')</span>').join('');
+  }).catch(() => {});
+}
+
+function _jrnlFilterTag(tag) {
+  _jrnlActiveTag = tag;
+  _journalLoad();
+}
+
+function _jrnlSearch(q) {
+  _jrnlSearchQ = q;
+  clearTimeout(_jrnlSearch._t);
+  _jrnlSearch._t = setTimeout(() => _journalLoad(), 250);
+}
+
+function _jrnlSwitchSub(view) {
+  _jrnlSubView = view;
+  document.querySelectorAll('.jrnl-sub-tab').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+  document.getElementById('jrnl-list-pane').style.display = view === 'list' ? '' : 'none';
+  document.getElementById('jrnl-calendar-pane').style.display = view === 'calendar' ? '' : 'none';
+  document.getElementById('jrnl-media-pane').style.display = view === 'media' ? '' : 'none';
+  document.getElementById('jrnl-map-pane').style.display = view === 'map' ? '' : 'none';
+  _jrnlRenderCurrentView();
+}
+
+function _jrnlRenderCurrentView() {
+  if (_jrnlSubView === 'list') _jrnlRenderEditor();
+  else if (_jrnlSubView === 'calendar') _jrnlRenderCalendar();
+  else if (_jrnlSubView === 'media') _jrnlRenderMedia();
+  else if (_jrnlSubView === 'map') _jrnlRenderMap();
+}
+
+function _jrnlSelect(id) {
+  _jrnlActiveId = id;
+  _jrnlSubView = 'list';
+  _jrnlSwitchSub('list');
+  _jrnlRenderSidebar();
+  _jrnlRenderEditor();
+}
+
+function _jrnlNew() {
+  _jrnlActiveId = '__new__';
+  _jrnlSubView = 'list';
+  _jrnlSwitchSub('list');
+  _jrnlRenderEditor();
+}
+
+function _jrnlRenderEditor() {
+  const pane = document.getElementById('jrnl-list-pane');
+  if (!_jrnlActiveId) {
+    pane.innerHTML = '<div class="jrnl-editor-empty">Select an entry or create a new one</div>';
+    return;
+  }
+  const isNew = _jrnlActiveId === '__new__';
+  const entry = isNew ? { id: '', text: '', date: new Date().toISOString().slice(0, 10), lat: null, lng: null, place_name: '', starred: 0, tags: '', prompt1: '', prompt2: '', prompt3: '', media: [] } : _jrnlEntries.find(e => e.id === _jrnlActiveId);
+  if (!entry) { pane.innerHTML = '<div class="jrnl-editor-empty">Entry not found</div>'; return; }
+
+  let html = '<div class="jrnl-editor">';
+  html += '<div style="display:flex;gap:10px;align-items:center;">';
+  html += '<input type="date" id="jrnl-ed-date" value="' + esc(entry.date) + '" style="flex:0 0 auto;">';
+  html += '<label style="margin:0;display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="jrnl-ed-star" ' + (entry.starred ? 'checked' : '') + '> Starred</label>';
+  html += '</div>';
+
+  // Prompts
+  const prompts = [_jrnlConfig.prompt1, _jrnlConfig.prompt2, _jrnlConfig.prompt3];
+  for (let i = 0; i < 3; i++) {
+    if (prompts[i]) {
+      html += '<label>' + esc(prompts[i]) + '</label>';
+      html += '<textarea class="prompt-area" id="jrnl-ed-prompt' + (i+1) + '" placeholder="' + esc(prompts[i]) + '">' + esc(entry['prompt' + (i+1)] || '') + '</textarea>';
+    }
+  }
+
+  html += '<label>Entry</label>';
+  html += '<textarea id="jrnl-ed-text" style="min-height:150px;" placeholder="Write your journal entry...">' + esc(entry.text || '') + '</textarea>';
+
+  // Location
+  html += '<label>Location</label>';
+  html += '<div style="display:flex;gap:8px;align-items:center;">';
+  html += '<input type="text" id="jrnl-ed-place" value="' + esc(entry.place_name || '') + '" placeholder="Place name">';
+  html += '<button class="jrnl-loc-btn" onclick="_jrnlGetLocation()">&#128205; Detect</button>';
+  html += '</div>';
+  html += '<input type="hidden" id="jrnl-ed-lat" value="' + (entry.lat || '') + '">';
+  html += '<input type="hidden" id="jrnl-ed-lng" value="' + (entry.lng || '') + '">';
+
+  // Tags
+  html += '<label>Tags (comma-separated)</label>';
+  html += '<input type="text" id="jrnl-ed-tags" value="' + esc(entry.tags || '') + '" placeholder="travel, work, personal">';
+
+  // Media
+  html += '<label>Photos</label>';
+  html += '<div class="jrnl-media-grid" id="jrnl-ed-media">';
+  if (entry.media) {
+    for (const m of entry.media) {
+      html += '<div style="position:relative;"><img class="jrnl-media-thumb" src="/api/journal/media/' + m.id + '" onclick="_jrnlViewMedia(\'/api/journal/media/' + m.id + '\')">';
+      html += '<button onclick="_jrnlDeleteMedia(\'' + m.id + '\')" style="position:absolute;top:2px;right:2px;background:rgba(0,0,0,0.6);color:#fff;border:none;border-radius:50%;width:18px;height:18px;font-size:0.6rem;cursor:pointer;">&times;</button></div>';
+    }
+  }
+  if (!isNew) {
+    html += '<div class="jrnl-media-upload" onclick="document.getElementById(\'jrnl-media-input\').click()">+</div>';
+    html += '<input type="file" id="jrnl-media-input" accept="image/*" multiple style="display:none;" onchange="_jrnlUploadMedia(this.files)">';
+  }
+  html += '</div>';
+
+  // Toolbar
+  html += '<div class="jrnl-toolbar">';
+  html += '<button class="jrnl-save-btn" onclick="_jrnlSave()">' + (isNew ? 'Create' : 'Save') + '</button>';
+  if (!isNew) html += '<button class="jrnl-del-btn" onclick="_jrnlDelete(\'' + entry.id + '\')">Delete</button>';
+  html += '</div>';
+  html += '</div>';
+  pane.innerHTML = html;
+}
+
+async function _jrnlSave() {
+  const isNew = _jrnlActiveId === '__new__';
+  const body = {
+    date: document.getElementById('jrnl-ed-date').value,
+    text: document.getElementById('jrnl-ed-text').value,
+    starred: document.getElementById('jrnl-ed-star').checked ? 1 : 0,
+    place_name: document.getElementById('jrnl-ed-place').value,
+    lat: parseFloat(document.getElementById('jrnl-ed-lat').value) || null,
+    lng: parseFloat(document.getElementById('jrnl-ed-lng').value) || null,
+    tags: document.getElementById('jrnl-ed-tags').value,
+    prompt1: document.getElementById('jrnl-ed-prompt1')?.value || '',
+    prompt2: document.getElementById('jrnl-ed-prompt2')?.value || '',
+    prompt3: document.getElementById('jrnl-ed-prompt3')?.value || '',
+  };
+  const url = isNew ? '/api/journal' : '/api/journal/' + _jrnlActiveId;
+  const method = isNew ? 'POST' : 'PATCH';
+  const r = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (r.ok) {
+    const data = await r.json();
+    if (isNew) _jrnlActiveId = data.id;
+    await _journalLoad();
+  }
+}
+
+async function _jrnlDelete(id) {
+  if (!confirm('Delete this journal entry?')) return;
+  await fetch('/api/journal/' + id, { method: 'DELETE' });
+  _jrnlActiveId = null;
+  await _journalLoad();
+}
+
+async function _jrnlUploadMedia(files) {
+  if (!_jrnlActiveId || _jrnlActiveId === '__new__') return;
+  for (const file of files) {
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      await fetch('/api/journal/' + _jrnlActiveId + '/media', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: file.name, data: ev.target.result })
+      });
+      await _journalLoad();
+    };
+    reader.readAsDataURL(file);
+  }
+}
+
+async function _jrnlDeleteMedia(mid) {
+  await fetch('/api/journal/media/' + mid, { method: 'DELETE' });
+  await _journalLoad();
+}
+
+function _jrnlViewMedia(url) {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.9);z-index:10000;display:flex;align-items:center;justify-content:center;cursor:pointer;';
+  overlay.onclick = () => overlay.remove();
+  overlay.innerHTML = '<img src="' + url + '" style="max-width:90vw;max-height:90vh;border-radius:8px;">';
+  document.body.appendChild(overlay);
+}
+
+function _jrnlGetLocation() {
+  if (!navigator.geolocation) { alert('Geolocation not supported'); return; }
+  navigator.geolocation.getCurrentPosition(async (pos) => {
+    document.getElementById('jrnl-ed-lat').value = pos.coords.latitude;
+    document.getElementById('jrnl-ed-lng').value = pos.coords.longitude;
+    // Reverse geocode
+    try {
+      const r = await fetch('https://nominatim.openstreetmap.org/reverse?lat=' + pos.coords.latitude + '&lon=' + pos.coords.longitude + '&format=json');
+      const d = await r.json();
+      const place = d.address ? [d.address.city || d.address.town || d.address.village || '', d.address.state || '', d.address.country || ''].filter(Boolean).join(', ') : '';
+      if (place) document.getElementById('jrnl-ed-place').value = place;
+    } catch(e) {}
+  }, (err) => { alert('Location error: ' + err.message); }, { enableHighAccuracy: true });
+}
+
+// Calendar view
+function _jrnlRenderCalendar() {
+  const pane = document.getElementById('jrnl-calendar-pane');
+  const year = _jrnlCalYear, month = _jrnlCalMonth;
+  const first = new Date(year, month, 1);
+  const last = new Date(year, month + 1, 0);
+  const startDay = first.getDay();
+  const today = new Date().toISOString().slice(0, 10);
+
+  // Build date->entries map
+  const byDate = {};
+  for (const e of _jrnlAllEntries) {
+    if (!byDate[e.date]) byDate[e.date] = [];
+    byDate[e.date].push(e);
+  }
+
+  let html = '<div class="jrnl-cal">';
+  html += '<div class="jrnl-cal-nav">';
+  html += '<button onclick="_jrnlCalPrev()">&laquo;</button>';
+  html += '<span>' + first.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) + '</span>';
+  html += '<button onclick="_jrnlCalNext()">&raquo;</button>';
+  html += '<button onclick="_jrnlCalToday()" style="font-size:0.72rem;">Today</button>';
+  html += '</div>';
+  html += '<div class="jrnl-cal-grid">';
+  for (const d of ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']) {
+    html += '<div class="jrnl-cal-hdr">' + d + '</div>';
+  }
+  // Leading blanks
+  for (let i = 0; i < startDay; i++) {
+    const pd = new Date(year, month, -(startDay - i - 1));
+    html += '<div class="jrnl-cal-day other"><div class="day-num">' + pd.getDate() + '</div></div>';
+  }
+  for (let d = 1; d <= last.getDate(); d++) {
+    const dateStr = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+    const isToday = dateStr === today;
+    const entries = byDate[dateStr] || [];
+    html += '<div class="jrnl-cal-day' + (isToday ? ' today' : '') + '" onclick="_jrnlCalDayClick(\'' + dateStr + '\')">';
+    html += '<div class="day-num">' + d + '</div>';
+    html += '<div class="day-dots">';
+    for (const e of entries.slice(0, 3)) {
+      const preview = (e.text || e.prompt1 || '').substring(0, 30);
+      html += '<div class="day-entry">' + esc(preview) + '</div>';
+    }
+    if (entries.length > 3) html += '<div class="day-entry" style="color:var(--dim);">+' + (entries.length - 3) + ' more</div>';
+    html += '</div></div>';
+  }
+  // Trailing blanks
+  const endDay = last.getDay();
+  for (let i = endDay + 1; i < 7; i++) {
+    html += '<div class="jrnl-cal-day other"><div class="day-num">' + (i - endDay) + '</div></div>';
+  }
+  html += '</div></div>';
+  pane.innerHTML = html;
+}
+
+function _jrnlCalPrev() { _jrnlCalMonth--; if (_jrnlCalMonth < 0) { _jrnlCalMonth = 11; _jrnlCalYear--; } _jrnlRenderCalendar(); }
+function _jrnlCalNext() { _jrnlCalMonth++; if (_jrnlCalMonth > 11) { _jrnlCalMonth = 0; _jrnlCalYear++; } _jrnlRenderCalendar(); }
+function _jrnlCalToday() { const now = new Date(); _jrnlCalMonth = now.getMonth(); _jrnlCalYear = now.getFullYear(); _jrnlRenderCalendar(); }
+function _jrnlCalDayClick(date) {
+  const entries = _jrnlAllEntries.filter(e => e.date === date);
+  if (entries.length === 1) { _jrnlSelect(entries[0].id); }
+  else if (entries.length > 1) {
+    // Show list filtered to that day
+    _jrnlSearchQ = '';
+    document.getElementById('jrnl-search').value = '';
+    _jrnlEntries = entries;
+    _jrnlRenderSidebar();
+    _jrnlSelect(entries[0].id);
+  } else {
+    // Create new entry for that date
+    _jrnlActiveId = '__new__';
+    _jrnlSwitchSub('list');
+    _jrnlRenderEditor();
+    setTimeout(() => { const el = document.getElementById('jrnl-ed-date'); if (el) el.value = date; }, 10);
+  }
+}
+
+// Media gallery view
+function _jrnlRenderMedia() {
+  const pane = document.getElementById('jrnl-media-pane');
+  const withMedia = _jrnlAllEntries.filter(e => e.media && e.media.length);
+  if (!withMedia.length) {
+    pane.innerHTML = '<div style="padding:40px;text-align:center;color:var(--dim);font-size:0.85rem;">No photos yet. Add photos to journal entries to see them here.</div>';
+    return;
+  }
+  let html = '<div class="jrnl-gallery">';
+  for (const e of withMedia) {
+    for (const m of e.media) {
+      const d = new Date(e.date + 'T12:00:00');
+      const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      html += '<div class="jrnl-gallery-item" onclick="_jrnlSelect(\'' + e.id + '\')">';
+      html += '<img src="/api/journal/media/' + m.id + '" loading="lazy">';
+      html += '<div class="caption">' + esc(dateStr) + (e.place_name ? ' &middot; ' + esc(e.place_name.split(',')[0]) : '') + '</div>';
+      html += '</div>';
+    }
+  }
+  html += '</div>';
+  pane.innerHTML = html;
+}
+
+// Map view
+function _jrnlRenderMap() {
+  const container = document.getElementById('jrnl-map-container');
+  if (!window.L) {
+    container.innerHTML = '<div style="padding:40px;text-align:center;color:var(--dim);">Loading map...</div>';
+    // Leaflet should already be loaded for the Map tab
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+    document.head.appendChild(link);
+    const script = document.createElement('script');
+    script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    script.onload = () => _jrnlRenderMap();
+    document.head.appendChild(script);
+    return;
+  }
+  if (_jrnlMap) { _jrnlMap.remove(); _jrnlMap = null; }
+  const withLoc = _jrnlAllEntries.filter(e => e.lat && e.lng);
+  if (!withLoc.length) {
+    container.innerHTML = '<div style="padding:40px;text-align:center;color:var(--dim);">No entries with location data yet.</div>';
+    return;
+  }
+  container.innerHTML = '';
+  _jrnlMap = L.map(container, { zoomControl: true }).setView([withLoc[0].lat, withLoc[0].lng], 4);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OSM &copy; CARTO', subdomains: 'abcd', maxZoom: 19
+  }).addTo(_jrnlMap);
+  const bounds = [];
+  for (const e of withLoc) {
+    const d = new Date(e.date + 'T12:00:00');
+    const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const preview = (e.text || e.prompt1 || '').substring(0, 80);
+    const popup = '<div style="max-width:200px;font-size:0.78rem;"><strong>' + esc(dateStr) + '</strong>' +
+      (e.place_name ? '<br><em>' + esc(e.place_name) + '</em>' : '') +
+      '<br>' + esc(preview) +
+      (e.media && e.media.length ? '<br><img src="/api/journal/media/' + e.media[0].id + '" style="width:100%;max-height:100px;object-fit:cover;border-radius:4px;margin-top:4px;">' : '') +
+      '</div>';
+    L.marker([e.lat, e.lng]).addTo(_jrnlMap).bindPopup(popup);
+    bounds.push([e.lat, e.lng]);
+  }
+  if (bounds.length > 1) _jrnlMap.fitBounds(bounds, { padding: [30, 30] });
+  setTimeout(() => _jrnlMap.invalidateSize(), 100);
+}
+
+// Config modal
+function _jrnlShowConfig() {
+  const overlay = document.createElement('div');
+  overlay.id = 'jrnl-config-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:10000;display:flex;align-items:center;justify-content:center;';
+  overlay.innerHTML = '<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;width:400px;max-width:90vw;">' +
+    '<h3 style="margin:0 0 16px;font-size:0.95rem;">Journal Prompts</h3>' +
+    '<p style="font-size:0.75rem;color:var(--dim);margin:0 0 12px;">Configure up to 3 optional prompts shown when creating entries.</p>' +
+    '<label style="font-size:0.72rem;color:var(--dim);">Prompt 1</label>' +
+    '<input type="text" id="jrnl-cfg-p1" value="' + esc(_jrnlConfig.prompt1 || '') + '" placeholder="e.g. What are you grateful for?" style="width:100%;padding:6px 8px;margin:4px 0 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--fg);font-size:0.8rem;font-family:inherit;">' +
+    '<label style="font-size:0.72rem;color:var(--dim);">Prompt 2</label>' +
+    '<input type="text" id="jrnl-cfg-p2" value="' + esc(_jrnlConfig.prompt2 || '') + '" placeholder="e.g. How are you feeling?" style="width:100%;padding:6px 8px;margin:4px 0 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--fg);font-size:0.8rem;font-family:inherit;">' +
+    '<label style="font-size:0.72rem;color:var(--dim);">Prompt 3</label>' +
+    '<input type="text" id="jrnl-cfg-p3" value="' + esc(_jrnlConfig.prompt3 || '') + '" placeholder="e.g. What did you learn today?" style="width:100%;padding:6px 8px;margin:4px 0 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--fg);font-size:0.8rem;font-family:inherit;">' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">' +
+    '<button onclick="document.getElementById(\'jrnl-config-overlay\').remove()" style="padding:6px 14px;background:none;border:1px solid var(--border);border-radius:6px;color:var(--fg);cursor:pointer;font-family:inherit;">Cancel</button>' +
+    '<button onclick="_jrnlSaveConfig()" style="padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-family:inherit;">Save</button>' +
+    '</div></div>';
+  document.body.appendChild(overlay);
+  overlay.onclick = (ev) => { if (ev.target === overlay) overlay.remove(); };
+}
+
+async function _jrnlSaveConfig() {
+  const body = {
+    prompt1: document.getElementById('jrnl-cfg-p1').value,
+    prompt2: document.getElementById('jrnl-cfg-p2').value,
+    prompt3: document.getElementById('jrnl-cfg-p3').value,
+  };
+  await fetch('/api/journal/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  _jrnlConfig = body;
+  document.getElementById('jrnl-config-overlay')?.remove();
+  _jrnlRenderEditor();
+}
 </script>
 
 <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
@@ -22657,6 +23854,7 @@ class CCHandler(BaseHTTPRequestHandler):
         alert_cursor = len(_sse_alerts)  # start from current position
         last_notes_version = _notes_version
         last_crm_version   = _crm_version
+        last_journal_version = _journal_version
 
         try:
             while True:
@@ -22729,6 +23927,9 @@ class CCHandler(BaseHTTPRequestHandler):
                 if _crm_version != last_crm_version:
                     last_crm_version = _crm_version
                     invalidated.append("crm")
+                if _journal_version != last_journal_version:
+                    last_journal_version = _journal_version
+                    invalidated.append("journal")
                 if invalidated:
                     self.wfile.write(f"data: {json.dumps({'type': 'invalidate', 'keys': invalidated})}\n\n".encode())
                     self.wfile.flush()
@@ -23116,7 +24317,7 @@ class CCHandler(BaseHTTPRequestHandler):
                 if brand_icon.exists():
                     ct = {".png": "image/png", ".jpg": "image/jpeg",
                           ".svg": "image/svg+xml", ".webp": "image/webp"}[ext]
-                    return self._raw(brand_icon.read_bytes(), ct, cache=True)
+                    return self._raw(brand_icon.read_bytes(), ct, cache=False)
             # Fall back to default icon
             icon_path = Path(__file__).resolve().parent / path.lstrip("/")
             if icon_path.exists():
@@ -23617,7 +24818,7 @@ class CCHandler(BaseHTTPRequestHandler):
             ext = fpath.suffix.lower()
             ct = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                   ".svg": "image/svg+xml", ".webp": "image/webp"}.get(ext, "application/octet-stream")
-            return self._raw(fpath.read_bytes(), ct, cache=True)
+            return self._raw(fpath.read_bytes(), ct, cache=False)
 
         # GET /api/logs — query structured event logs (SQLite + in-memory ring merged)
         if method == "GET" and path == "/api/logs":
@@ -25325,6 +26526,338 @@ p{{color:#888;margin:12px 0 28px;font-size:0.9rem;line-height:1.5}}
                     pass
                 db.commit()
                 return self._json({"ok": True})
+
+        # ── Graph / Mind Map ──────────────────────────────────────────────────
+        if path.startswith("/api/graph"):
+            db = get_db()
+            now = int(time.time())
+
+            # GET /api/graph/:id — get full graph (nodes + edges)
+            m = re.match(r"^/api/graph/([^/]+)$", path)
+            if method == "GET" and m:
+                gid = m.group(1)
+                nodes = [dict(r) for r in db.execute(
+                    "SELECT id,label,body,color,folder,source_path,x,y,pinned FROM graph_nodes WHERE graph_id=?", (gid,)
+                ).fetchall()]
+                edges = [dict(r) for r in db.execute(
+                    "SELECT id,source,target,label FROM graph_edges WHERE graph_id=?", (gid,)
+                ).fetchall()]
+                return self._json({"nodes": nodes, "edges": edges})
+
+            # POST /api/graph/:id/import-vault — parse an Obsidian vault
+            m = re.match(r"^/api/graph/([^/]+)/import-vault$", path)
+            if method == "POST" and m:
+                gid = m.group(1)
+                body = self._read_body()
+                vault_path = body.get("path", "")
+                if not vault_path:
+                    return self._json({"error": "path required"}, 400)
+                vp = Path(vault_path).expanduser().resolve()
+                if not vp.is_dir():
+                    return self._json({"error": "not a directory"}, 400)
+                if not _is_path_allowed(vp):
+                    return self._json({"error": "path not allowed"}, 403)
+                # Parse all .md files
+                nodes_map = {}  # rel_path -> {label, body, folder, links}
+                label_to_key = {}  # label -> key (for link resolution)
+                for md in sorted(vp.rglob("*.md")):
+                    rel = md.relative_to(vp)
+                    parts = rel.parts
+                    folder = parts[0] if len(parts) > 1 else "root"
+                    label = md.stem
+                    key = str(rel.with_suffix(""))  # e.g. "Therapy/Memories/Foo"
+                    try:
+                        content = md.read_text(errors="replace")
+                    except Exception:
+                        content = ""
+                    # Extract [[wikilinks]]
+                    links = re.findall(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]", content)
+                    link_names = []
+                    for lnk in links:
+                        ln = lnk.split("/")[-1] if "/" in lnk else lnk
+                        link_names.append(ln)
+                    nodes_map[key] = {"label": label, "body": content, "folder": folder, "links": link_names, "path": str(md)}
+                    # First one wins for link resolution by label
+                    if label not in label_to_key:
+                        label_to_key[label] = key
+                # Clear existing
+                db.execute("DELETE FROM graph_edges WHERE graph_id=?", (gid,))
+                db.execute("DELETE FROM graph_nodes WHERE graph_id=?", (gid,))
+                # Build node IDs
+                def _make_nid(key):
+                    return re.sub(r"[^a-zA-Z0-9_-]", "_", key).lower()
+                # Insert nodes
+                folder_color_map = {}
+                for key, data in nodes_map.items():
+                    nid = _make_nid(key)
+                    # Auto-assign colors: use known colors for known folders, hash for others
+                    known = {"Memories": "#C97B3A", "Patterns": "#4A6FA5", "Beliefs": "#A54A4A",
+                             "Behaviors": "#4A9A6F", "Relationship - Her": "#7A4AA5"}
+                    f = data["folder"]
+                    if f in known:
+                        color = known[f]
+                    elif f == "root":
+                        color = "#888888"
+                    else:
+                        if f not in folder_color_map:
+                            palette = ["#C97B3A","#4A6FA5","#A54A4A","#4A9A6F","#7A4AA5","#6B8E8A","#B5651D","#8B5CF6","#EC4899","#10B981","#F59E0B","#6366F1"]
+                            folder_color_map[f] = palette[len(folder_color_map) % len(palette)]
+                        color = folder_color_map[f]
+                    db.execute(
+                        "INSERT INTO graph_nodes (id,graph_id,label,body,color,folder,source_path,created,updated) VALUES (?,?,?,?,?,?,?,?,?)",
+                        (nid, gid, data["label"], data["body"], color, f, data.get("path", ""), now, now)
+                    )
+                # Insert edges
+                key_to_nid = {k: _make_nid(k) for k in nodes_map}
+                eidx = 0
+                seen_edges = set()
+                for key, data in nodes_map.items():
+                    src = key_to_nid[key]
+                    for lnk in data["links"]:
+                        tgt_key = label_to_key.get(lnk)
+                        tgt = key_to_nid.get(tgt_key) if tgt_key else None
+                        edge_pair = (src, tgt)
+                        if tgt and tgt != src and edge_pair not in seen_edges:
+                            seen_edges.add(edge_pair)
+                            eidx += 1
+                            db.execute(
+                                "INSERT OR IGNORE INTO graph_edges (id,graph_id,source,target,created) VALUES (?,?,?,?,?)",
+                                (f"e-{eidx}", gid, src, tgt, now)
+                            )
+                db.commit()
+                cnt_n = len(nodes_map)
+                cnt_e = eidx
+                return self._json({"ok": True, "nodes": cnt_n, "edges": cnt_e})
+
+            # PATCH /api/graph/:id/nodes/:nid — update node position etc
+            m = re.match(r"^/api/graph/([^/]+)/nodes/([^/]+)$", path)
+            if method == "PATCH" and m:
+                gid, nid = m.group(1), m.group(2)
+                body = self._read_body()
+                sets, vals = [], []
+                for k in ("x", "y", "pinned", "label", "body", "color", "folder"):
+                    if k in body:
+                        sets.append(f"{k}=?")
+                        vals.append(body[k])
+                if sets:
+                    sets.append("updated=?")
+                    vals.append(now)
+                    vals.append(nid)
+                    vals.append(gid)
+                    db.execute(f"UPDATE graph_nodes SET {','.join(sets)} WHERE id=? AND graph_id=?", vals)
+                    db.commit()
+                return self._json({"ok": True})
+
+            return self._json({"error": "not found"}, 404)
+
+        # ── Journal ──────────────────────────────────────────────────────────
+        if path.startswith("/api/journal"):
+            global _journal_version
+            import secrets as _jsec
+            db = get_db()
+            now = int(time.time())
+
+            # GET /api/journal — list entries
+            if method == "GET" and path == "/api/journal":
+                q = qs.get("q", [""])[0].strip()
+                tag = qs.get("tag", [""])[0].strip()
+                from_d = qs.get("from", [""])[0]
+                to_d = qs.get("to", [""])[0]
+                has_media = qs.get("has_media", [""])[0]
+                has_location = qs.get("has_location", [""])[0]
+                sql = "SELECT * FROM journal_entries WHERE deleted IS NULL"
+                params = []
+                if q:
+                    sql += " AND (text LIKE ? OR place_name LIKE ? OR tags LIKE ? OR prompt1 LIKE ? OR prompt2 LIKE ? OR prompt3 LIKE ?)"
+                    params += [f"%{q}%"] * 6
+                if tag:
+                    sql += " AND (',' || tags || ',' LIKE ?)"
+                    params.append(f"%,{tag},%")
+                if from_d:
+                    sql += " AND date >= ?"; params.append(from_d)
+                if to_d:
+                    sql += " AND date <= ?"; params.append(to_d)
+                if has_location == "1":
+                    sql += " AND lat IS NOT NULL"
+                if has_media == "1":
+                    sql += " AND id IN (SELECT entry_id FROM journal_media)"
+                sql += " ORDER BY date DESC, created DESC"
+                rows = db.execute(sql, params).fetchall()
+                entries = []
+                for r in rows:
+                    e = dict(r)
+                    e["media"] = [dict(m) for m in db.execute(
+                        "SELECT id, filename, mime, position FROM journal_media WHERE entry_id=? ORDER BY position", (e["id"],)).fetchall()]
+                    entries.append(e)
+                return self._json(entries)
+
+            # GET /api/journal/tags — all unique tags with counts
+            if method == "GET" and path == "/api/journal/tags":
+                rows = db.execute("SELECT tags FROM journal_entries WHERE deleted IS NULL AND tags != ''").fetchall()
+                tag_counts = {}
+                for r in rows:
+                    for t in r["tags"].split(","):
+                        t = t.strip()
+                        if t: tag_counts[t] = tag_counts.get(t, 0) + 1
+                return self._json(tag_counts)
+
+            # GET/POST /api/journal/config — prompt configuration
+            if path == "/api/journal/config":
+                if method == "GET":
+                    prompts = {}
+                    for i in range(1, 4):
+                        row = db.execute("SELECT value FROM prefs WHERE key=?", (f"journal_prompt_{i}",)).fetchone()
+                        prompts[f"prompt{i}"] = row["value"] if row else ""
+                    return self._json(prompts)
+                if method == "POST":
+                    body = self._read_body()
+                    for i in range(1, 4):
+                        val = body.get(f"prompt{i}", "")
+                        db.execute("INSERT INTO prefs (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=?",
+                                   (f"journal_prompt_{i}", val, val))
+                    db.commit()
+                    return self._json({"ok": True})
+
+            # POST /api/journal — create entry
+            if method == "POST" and path == "/api/journal":
+                body = self._read_body()
+                eid = _next_issue_id("JRN")
+                date_val = body.get("date", time.strftime("%Y-%m-%d"))
+                tags_str = ",".join(t.strip() for t in body.get("tags", []) if t.strip()) if isinstance(body.get("tags"), list) else body.get("tags", "")
+                db.execute(
+                    "INSERT INTO journal_entries (id,text,date,created,updated,lat,lng,place_name,starred,tags,prompt1,prompt2,prompt3) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (eid, body.get("text",""), date_val, now, now,
+                     body.get("lat"), body.get("lng"), body.get("place_name",""),
+                     1 if body.get("starred") else 0, tags_str,
+                     body.get("prompt1",""), body.get("prompt2",""), body.get("prompt3",""))
+                )
+                db.commit()
+                _journal_version += 1
+                return self._json({"id": eid, "ok": True}, 201)
+
+            # POST /api/journal/import — bulk import Day One entries
+            if method == "POST" and path == "/api/journal/import":
+                body = self._read_body()
+                entries = body.get("entries", [])
+                imported = 0
+                for entry in entries:
+                    eid = _next_issue_id("JRN")
+                    cd = entry.get("creationDate", "")
+                    date_val = cd[:10] if cd else time.strftime("%Y-%m-%d")
+                    created_ts = int(time.mktime(time.strptime(cd[:19], "%Y-%m-%dT%H:%M:%S"))) if cd else now
+                    loc = entry.get("location", {})
+                    lat = loc.get("latitude")
+                    lng = loc.get("longitude")
+                    place_parts = [p for p in [loc.get("placeName") or loc.get("localityName",""), loc.get("administrativeArea",""), loc.get("country","")] if p]
+                    place_name = ", ".join(place_parts)
+                    tags_str = ",".join(entry.get("tags", []))
+                    db.execute(
+                        "INSERT INTO journal_entries (id,text,date,created,updated,lat,lng,place_name,starred,tags,prompt1,prompt2,prompt3) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (eid, entry.get("text",""), date_val, created_ts, created_ts,
+                         lat, lng, place_name, 1 if entry.get("starred") else 0, tags_str, "", "", "")
+                    )
+                    # Handle photos
+                    for i, photo in enumerate(entry.get("photos", [])):
+                        mid = _jsec.token_urlsafe(10)
+                        md5 = photo.get("md5", "")
+                        fname = photo.get("filename", f"{md5}.jpeg")
+                        db.execute(
+                            "INSERT INTO journal_media (id, entry_id, filename, mime, position, created) VALUES (?,?,?,?,?,?)",
+                            (mid, eid, fname, f"image/{photo.get('type','jpeg')}", i, created_ts)
+                        )
+                        # Copy photo file if provided in import_dir
+                        src = Path(body.get("photos_dir", "")) / f"{md5}.jpeg"
+                        if src.exists():
+                            dest = CC_JOURNAL_MEDIA / f"{mid}.jpeg"
+                            import shutil
+                            shutil.copy2(str(src), str(dest))
+                    imported += 1
+                db.commit()
+                _journal_version += 1
+                return self._json({"ok": True, "imported": imported})
+
+            # Serve journal media files
+            if method == "GET" and path.startswith("/api/journal/media/"):
+                mid = path[len("/api/journal/media/"):]
+                if "/" in mid or "\\" in mid: return self._json({"error": "not found"}, 404)
+                # Find media file
+                for ext in (".jpeg", ".jpg", ".png", ".webp", ".gif"):
+                    fpath = CC_JOURNAL_MEDIA / f"{mid}{ext}"
+                    if fpath.exists():
+                        ct = {".jpeg": "image/jpeg", ".jpg": "image/jpeg", ".png": "image/png",
+                              ".webp": "image/webp", ".gif": "image/gif"}[ext]
+                        return self._raw(fpath.read_bytes(), ct, cache=True)
+                return self._json({"error": "not found"}, 404)
+
+            # GET/PATCH/DELETE /api/journal/:id
+            _m_j = re.match(r"^/api/journal/([A-Z]+-\d+)$", path)
+            if _m_j:
+                eid = _m_j.group(1)
+                if method == "GET":
+                    row = db.execute("SELECT * FROM journal_entries WHERE id=? AND deleted IS NULL", (eid,)).fetchone()
+                    if not row: return self._json({"error": "not found"}, 404)
+                    e = dict(row)
+                    e["media"] = [dict(m) for m in db.execute(
+                        "SELECT id, filename, mime, position FROM journal_media WHERE entry_id=? ORDER BY position", (eid,)).fetchall()]
+                    return self._json(e)
+                if method == "PATCH":
+                    body = self._read_body()
+                    allowed = {"text","date","lat","lng","place_name","starred","tags","prompt1","prompt2","prompt3"}
+                    fields = {k: v for k, v in body.items() if k in allowed}
+                    if "tags" in fields and isinstance(fields["tags"], list):
+                        fields["tags"] = ",".join(t.strip() for t in fields["tags"] if t.strip())
+                    if fields:
+                        set_cl = ", ".join(f"{k}=?" for k in fields)
+                        db.execute(f"UPDATE journal_entries SET {set_cl}, updated=? WHERE id=?",
+                                   [*fields.values(), now, eid])
+                        db.commit()
+                        _journal_version += 1
+                    return self._json({"ok": True})
+                if method == "DELETE":
+                    db.execute("UPDATE journal_entries SET deleted=? WHERE id=?", (now, eid))
+                    db.commit()
+                    _journal_version += 1
+                    return self._json({"ok": True})
+
+            # POST /api/journal/:id/media — upload media to entry
+            _m_jm = re.match(r"^/api/journal/([A-Z]+-\d+)/media$", path)
+            if _m_jm and method == "POST":
+                eid = _m_jm.group(1)
+                body = self._read_body()
+                b64 = body.get("data", "")
+                if "," in b64: b64 = b64.split(",", 1)[1]
+                data = base64.b64decode(b64)
+                fname = body.get("name", "photo.jpg")
+                mid = _jsec.token_urlsafe(10)
+                # Detect extension
+                if data[:8] == b'\x89PNG\r\n\x1a\n': ext, mime = ".png", "image/png"
+                elif data[:2] == b'\xff\xd8': ext, mime = ".jpeg", "image/jpeg"
+                elif data[:4] == b'RIFF': ext, mime = ".webp", "image/webp"
+                else: ext, mime = ".jpeg", "image/jpeg"
+                dest = CC_JOURNAL_MEDIA / f"{mid}{ext}"
+                dest.write_bytes(data)
+                pos = db.execute("SELECT COUNT(*) as c FROM journal_media WHERE entry_id=?", (eid,)).fetchone()["c"]
+                db.execute(
+                    "INSERT INTO journal_media (id, entry_id, filename, mime, position, created) VALUES (?,?,?,?,?,?)",
+                    (mid, eid, fname, mime, pos, now)
+                )
+                db.commit()
+                _journal_version += 1
+                return self._json({"id": mid, "ok": True}, 201)
+
+            # DELETE /api/journal/media/:id
+            _m_jmd = re.match(r"^/api/journal/media/([^/]+)$", path)
+            if _m_jmd and method == "DELETE":
+                mid = _m_jmd.group(1)
+                for ext in (".jpeg", ".jpg", ".png", ".webp", ".gif"):
+                    fpath = CC_JOURNAL_MEDIA / f"{mid}{ext}"
+                    if fpath.exists(): fpath.unlink()
+                db.execute("DELETE FROM journal_media WHERE id=?", (mid,))
+                db.commit()
+                _journal_version += 1
+                return self._json({"ok": True})
+
+            return self._json({"error": "journal route not found"}, 404)
 
         # ── CRM / People ─────────────────────────────────────────────────────
         if path == "/api/crm/contacts" or path.startswith("/api/crm/"):
