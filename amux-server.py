@@ -7927,13 +7927,16 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   }
 
   /* ── Graph / Mind Map ── */
-  #graph-view { height: calc(100vh - 110px); display: flex; position: relative; overflow: hidden; background: var(--bg); }
-  .graph-canvas { position: absolute; inset: 0; background: radial-gradient(circle, rgba(255,255,255,0.03) 1px, transparent 1px); background-size: 24px 24px; cursor: grab; overflow: hidden; }
-  .graph-canvas.grabbing { cursor: grabbing; }
-  .graph-controls { position: absolute; top: 8px; left: 8px; display: flex; flex-direction: column; gap: 3px; z-index: 15; background: var(--bg); border-radius: 8px; border: 1px solid var(--border); padding: 4px; }
-  .graph-controls button { width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--fg); font-size: 1rem; cursor: pointer; display: flex; align-items: center; justify-content: center; }
-  .graph-controls button:hover { background: var(--hover); }
-  .graph-filters { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; z-index: 15; flex-wrap: wrap; padding: 6px 8px; background: var(--bg); border-radius: 8px; border: 1px solid var(--border); backdrop-filter: blur(8px); max-width: 50%; }
+  #graph-view { height: calc(100vh - 110px); display: flex; flex-direction: row; overflow: hidden; background: var(--bg); }
+  .graph-sidebar {
+    width: 240px; min-width: 180px; border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0;
+    background: var(--card); transition: width 0.2s ease, min-width 0.2s ease, border 0.2s ease;
+  }
+  .graph-sidebar.collapsed { width: 0; min-width: 0; border-right: none; overflow: hidden; }
+  .graph-sidebar-hdr { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px 6px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .graph-filters-sidebar { display: flex; gap: 4px; padding: 6px 10px; flex-wrap: wrap; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .graph-filters-sidebar:empty { display: none; }
   .graph-filter-btn { padding: 3px 8px; font-size: 0.68rem; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--dim); cursor: pointer; transition: all 0.15s; white-space: nowrap; }
   .graph-filter-btn.active { color: #fff; border-color: transparent; }
   .graph-filter-btn.active[data-folder="Memories"] { background: #C97B3A; }
@@ -7942,6 +7945,21 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .graph-filter-btn.active[data-folder="Behaviors"] { background: #4A9A6F; }
   .graph-filter-btn.active[data-folder="Relationship - Her"] { background: #7A4AA5; }
   .graph-filter-btn.active[data-folder="root"] { background: #666; }
+  .graph-node-list { flex: 1; overflow-y: auto; }
+  .graph-node-item { padding: 6px 12px; font-size: 0.78rem; cursor: pointer; border-bottom: 1px solid rgba(139,148,158,0.1); color: var(--fg); display: flex; align-items: center; gap: 6px; }
+  .graph-node-item:hover { background: var(--hover); }
+  .graph-node-item.active { background: var(--surface); border-left: 3px solid var(--accent); }
+  .graph-node-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .graph-expand-btn { position: absolute; top: 10px; left: 10px; z-index: 16; background: var(--surface); border: 1px solid var(--border); color: var(--dim); cursor: pointer; padding: 6px; border-radius: 6px; display: none; align-items: center; justify-content: center; flex-shrink: 0; }
+  .graph-expand-btn:hover { background: var(--hover); color: var(--text); }
+  #graph-view.sidebar-collapsed .graph-expand-btn { display: flex; }
+  #graph-view.sidebar-collapsed .graph-controls { left: 46px; }
+  .graph-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+  .graph-canvas { position: absolute; inset: 0; background: radial-gradient(circle, rgba(255,255,255,0.03) 1px, transparent 1px); background-size: 24px 24px; cursor: grab; overflow: hidden; }
+  .graph-canvas.grabbing { cursor: grabbing; }
+  .graph-controls { position: absolute; top: 8px; left: 8px; display: flex; flex-direction: column; gap: 3px; z-index: 15; background: var(--bg); border-radius: 8px; border: 1px solid var(--border); padding: 4px; }
+  .graph-controls button { width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--fg); font-size: 1rem; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .graph-controls button:hover { background: var(--hover); }
   .graph-node { position: absolute; padding: 8px 14px; border-radius: 8px; font-size: 0.78rem; font-weight: 500; cursor: grab; user-select: none; border: 1.5px solid transparent; transition: box-shadow 0.15s, opacity 0.2s; white-space: nowrap; z-index: 2; }
   .graph-node:hover { box-shadow: 0 0 12px rgba(255,255,255,0.1); z-index: 5; }
   .graph-node.dragging { cursor: grabbing; z-index: 10; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
@@ -7963,34 +7981,49 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .graph-side-links .chip { font-size: 0.7rem; padding: 3px 10px; border-radius: 10px; cursor: pointer; border: 1px solid var(--border); background: var(--bg); color: var(--fg); }
   .graph-side-links .chip:hover { background: var(--hover); }
   @media (max-width: 600px) {
-    #graph-view { height: calc(100dvh - 122px); }
+    #graph-view { height: calc(100dvh - 122px); position: relative; }
+    .graph-sidebar {
+      position: absolute; top: 0; left: 0; bottom: 0; z-index: 10;
+      width: 100% !important; min-width: 0 !important; border-right: none;
+      transition: transform 0.2s ease, opacity 0.2s ease;
+    }
+    .graph-sidebar.collapsed {
+      width: 100% !important; transform: translateX(-110%); opacity: 0; pointer-events: none;
+    }
+    .graph-expand-btn { display: flex !important; }
     .graph-side-panel { width: 100%; }
-    .graph-filters { top: auto; bottom: 12px; right: 12px; left: 12px; justify-content: center; }
   }
 
   /* ── Journal ── */
   #journal-view { height: calc(100vh - 110px); display: flex; flex-direction: row; overflow: hidden; }
-  .jrnl-sidebar { width: 320px; min-width: 260px; border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
-  .jrnl-sidebar-hdr { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--border); }
-  .jrnl-sidebar-hdr .jrnl-new-btn { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 4px 10px; font-size: 0.75rem; cursor: pointer; font-weight: 600; }
-  .jrnl-search-wrap { padding: 6px 10px; border-bottom: 1px solid var(--border); }
-  .jrnl-search-wrap input { width: 100%; padding: 5px 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); font-size: 0.78rem; font-family: inherit; }
-  .jrnl-tags-bar { display: flex; gap: 4px; padding: 6px 10px; overflow-x: auto; flex-wrap: nowrap; border-bottom: 1px solid var(--border); }
+  .jrnl-sidebar {
+    width: 260px; min-width: 200px; border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0;
+    background: var(--card); transition: width 0.2s ease, min-width 0.2s ease, border 0.2s ease;
+  }
+  .jrnl-sidebar.collapsed { width: 0; min-width: 0; border-right: none; overflow: hidden; }
+  .jrnl-sidebar-hdr { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px 6px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .jrnl-search-wrap { padding: 6px 10px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .jrnl-search-wrap input { width: 100%; box-sizing: border-box; padding: 5px 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); font-size: 0.78rem; font-family: inherit; outline: none; }
+  .jrnl-tags-bar { display: flex; gap: 4px; padding: 6px 10px; overflow-x: auto; flex-wrap: nowrap; border-bottom: 1px solid var(--border); flex-shrink: 0; }
   .jrnl-tags-bar:empty { display: none; }
   .jrnl-tag-chip { padding: 2px 8px; font-size: 0.68rem; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--dim); cursor: pointer; white-space: nowrap; }
   .jrnl-tag-chip.active { background: var(--accent); color: #fff; border-color: var(--accent); }
   .jrnl-entry-list { flex: 1; overflow-y: auto; }
-  .jrnl-entry-card { padding: 10px 12px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.1s; }
+  .jrnl-entry-card { padding: 10px 12px; border-bottom: 1px solid rgba(139,148,158,0.1); cursor: pointer; transition: background 0.1s; }
   .jrnl-entry-card:hover { background: var(--hover); }
   .jrnl-entry-card.active { background: var(--surface); border-left: 3px solid var(--accent); }
   .jrnl-entry-date { font-size: 0.68rem; color: var(--dim); margin-bottom: 2px; }
-  .jrnl-entry-preview { font-size: 0.8rem; color: var(--fg); line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+  .jrnl-entry-preview { font-size: 0.8rem; color: var(--fg); line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   .jrnl-entry-meta { display: flex; gap: 6px; align-items: center; margin-top: 4px; flex-wrap: wrap; }
   .jrnl-entry-meta .loc { font-size: 0.65rem; color: var(--dim); }
   .jrnl-entry-meta .tag { font-size: 0.6rem; padding: 1px 6px; border-radius: 8px; background: rgba(63,185,80,0.15); color: var(--accent); }
   .jrnl-entry-meta .media-count { font-size: 0.6rem; color: var(--dim); }
+  .jrnl-expand-btn { background: transparent; border: none; color: var(--dim); cursor: pointer; padding: 4px; border-radius: 4px; display: none; align-items: center; justify-content: center; flex-shrink: 0; }
+  .jrnl-expand-btn:hover { background: rgba(139,148,158,0.12); color: var(--text); }
+  #journal-view.sidebar-collapsed .jrnl-expand-btn { display: flex; }
   .jrnl-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-  .jrnl-sub-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); padding: 0 12px; }
+  .jrnl-sub-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); padding: 0 12px; align-items: center; }
   .jrnl-sub-tab { padding: 8px 16px; font-size: 0.78rem; background: none; border: none; color: var(--dim); cursor: pointer; border-bottom: 2px solid transparent; font-family: inherit; }
   .jrnl-sub-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
   .jrnl-sub-tab:hover { color: var(--fg); }
@@ -8036,8 +8069,16 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   #jrnl-map-pane { height: 100%; }
   .jrnl-map-container { width: 100%; height: 100%; }
   @media (max-width: 600px) {
-    #journal-view { height: calc(100dvh - 122px); flex-direction: column; }
-    .jrnl-sidebar { width: 100%; min-width: 0; max-height: 40vh; border-right: none; border-bottom: 1px solid var(--border); }
+    #journal-view { height: calc(100dvh - 122px); position: relative; }
+    .jrnl-sidebar {
+      position: absolute; top: 0; left: 0; bottom: 0; z-index: 10;
+      width: 100% !important; min-width: 0 !important; border-right: none;
+      transition: transform 0.2s ease, opacity 0.2s ease;
+    }
+    .jrnl-sidebar.collapsed {
+      width: 100% !important; transform: translateX(-110%); opacity: 0; pointer-events: none;
+    }
+    .jrnl-expand-btn { display: flex !important; }
     .jrnl-cal-day { min-height: 50px; }
     .jrnl-gallery { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
   }
@@ -8727,52 +8768,69 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
-<div id="graph-view" style="display:none;flex-direction:column;flex:1;min-height:0;">
-  <div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap;">
-    <span style="font-size:0.78rem;color:var(--dim);white-space:nowrap;">Vault:</span>
-    <input id="graph-vault-path" type="text" placeholder="/path/to/obsidian/vault" style="flex:1;min-width:180px;font-size:0.78rem;padding:4px 8px;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--fg);font-family:inherit;">
-    <button onclick="_graphImportVault()" style="padding:4px 12px;background:var(--accent);color:#fff;border:none;border-radius:4px;font-size:0.78rem;cursor:pointer;white-space:nowrap;">Import</button>
-    <span id="graph-stats" style="font-size:0.68rem;color:var(--dim);"></span>
-  </div>
-  <div style="position:relative;flex:1;min-height:0;">
-  <div class="graph-controls">
-    <button onclick="_graphZoom(1.2)" title="Zoom in">+</button>
-    <button onclick="_graphZoom(0.8)" title="Zoom out">&minus;</button>
-    <button onclick="_graphResetLayout()" title="Reset layout">&#x21bb;</button>
-    <button id="graph-edges-toggle" onclick="_graphToggleAllEdges()" title="Toggle all connections">&#x2731;</button>
-  </div>
-  <div class="graph-filters" id="graph-filters"></div>
-  <div class="graph-canvas" id="graph-canvas">
-    <svg id="graph-svg" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;">
-      <defs>
-        <marker id="graph-arrow" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="8" markerHeight="6" orient="auto-start-reverse">
-          <path d="M0,0 L10,3 L0,6 Z" fill="context-stroke" opacity="0.6"/>
-        </marker>
-      </defs>
-      <g id="graph-edges-g"></g>
-    </svg>
-    <div id="graph-nodes-container" style="position:absolute;top:0;left:0;width:0;height:0;"></div>
-  </div>
-  <div class="graph-side-panel" id="graph-side-panel">
-    <div class="graph-side-header">
-      <span id="graph-side-title" style="flex:1;font-weight:600;font-size:0.9rem;"></span>
-      <span id="graph-side-badge" class="badge"></span>
-      <button onclick="_graphClosePanel()" style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:1.1rem;">&times;</button>
+<div id="graph-view" style="display:none;flex-direction:row;overflow:hidden;">
+  <!-- Graph sidebar -->
+  <div class="graph-sidebar" id="graph-sidebar">
+    <div class="graph-sidebar-hdr">
+      <span style="font-weight:600;font-size:0.85rem;">Graph</span>
+      <div style="display:flex;gap:4px;align-items:center;">
+        <button class="notes-toggle-btn" onclick="_graphToggleSidebar()" title="Collapse sidebar"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/></svg></button>
+      </div>
     </div>
-    <div class="graph-side-body" id="graph-side-body"></div>
-    <div class="graph-side-links" id="graph-side-links"></div>
+    <div style="padding:8px 10px;border-bottom:1px solid var(--border);display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+      <input id="graph-vault-path" type="text" placeholder="/path/to/obsidian/vault" style="flex:1;min-width:100px;font-size:0.75rem;padding:4px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--fg);font-family:inherit;">
+      <button onclick="_graphImportVault()" style="padding:3px 10px;background:var(--accent);color:#fff;border:none;border-radius:4px;font-size:0.72rem;cursor:pointer;white-space:nowrap;">Import</button>
+    </div>
+    <div style="padding:6px 10px;border-bottom:1px solid var(--border);">
+      <input id="graph-sidebar-search" type="search" placeholder="Search nodes..." oninput="_graphSidebarSearch(this.value)" style="width:100%;padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--fg);font-size:0.78rem;font-family:inherit;">
+    </div>
+    <div class="graph-filters-sidebar" id="graph-filters"></div>
+    <div id="graph-node-list" class="graph-node-list"></div>
+    <div style="padding:6px 10px;border-top:1px solid var(--border);font-size:0.68rem;color:var(--dim);" id="graph-stats"></div>
   </div>
+  <!-- Graph main canvas -->
+  <div class="graph-main" id="graph-main">
+    <div style="position:relative;flex:1;min-height:0;">
+    <button class="graph-expand-btn" onclick="_graphToggleSidebar()" title="Show sidebar"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m14 9 3 3-3 3"/></svg></button>
+    <div class="graph-controls">
+      <button onclick="_graphZoom(1.2)" title="Zoom in">+</button>
+      <button onclick="_graphZoom(0.8)" title="Zoom out">&minus;</button>
+      <button onclick="_graphResetLayout()" title="Reset layout">&#x21bb;</button>
+      <button id="graph-edges-toggle" onclick="_graphToggleAllEdges()" title="Toggle all connections">&#x2731;</button>
+    </div>
+    <div class="graph-canvas" id="graph-canvas">
+      <svg id="graph-svg" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;">
+        <defs>
+          <marker id="graph-arrow" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="8" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,3 L0,6 Z" fill="context-stroke" opacity="0.6"/>
+          </marker>
+        </defs>
+        <g id="graph-edges-g"></g>
+      </svg>
+      <div id="graph-nodes-container" style="position:absolute;top:0;left:0;width:0;height:0;"></div>
+    </div>
+    <div class="graph-side-panel" id="graph-side-panel">
+      <div class="graph-side-header">
+        <span id="graph-side-title" style="flex:1;font-weight:600;font-size:0.9rem;"></span>
+        <span id="graph-side-badge" class="badge"></span>
+        <button onclick="_graphClosePanel()" style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:1.1rem;">&times;</button>
+      </div>
+      <div class="graph-side-body" id="graph-side-body"></div>
+      <div class="graph-side-links" id="graph-side-links"></div>
+    </div>
+    </div>
   </div>
 </div>
 
 <!-- Journal -->
 <div id="journal-view" style="display:none;">
-  <div class="jrnl-sidebar">
+  <div class="jrnl-sidebar" id="jrnl-sidebar">
     <div class="jrnl-sidebar-hdr">
       <span style="font-weight:600;font-size:0.85rem;">Journal</span>
-      <div style="display:flex;gap:6px;align-items:center;">
-        <button class="jrnl-new-btn" onclick="_jrnlNew()">+ New</button>
-        <button style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 7px;cursor:pointer;color:var(--dim);font-size:0.7rem;" onclick="_jrnlShowConfig()" title="Configure prompts">&#9881;</button>
+      <div style="display:flex;gap:4px;align-items:center;">
+        <button class="notes-new-btn" onclick="_jrnlNew()" title="New entry"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></button>
+        <button class="notes-new-btn" onclick="_jrnlShowConfig()" title="Configure prompts"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
+        <button class="notes-toggle-btn" onclick="_jrnlToggleSidebar()" title="Collapse sidebar"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/></svg></button>
       </div>
     </div>
     <div class="jrnl-search-wrap">
@@ -8783,6 +8841,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   </div>
   <div class="jrnl-main">
     <div class="jrnl-sub-tabs">
+      <button class="jrnl-expand-btn" onclick="_jrnlToggleSidebar()" title="Show entries list"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m14 9 3 3-3 3"/></svg></button>
       <button class="jrnl-sub-tab active" data-view="list" onclick="_jrnlSwitchSub('list')">List</button>
       <button class="jrnl-sub-tab" data-view="calendar" onclick="_jrnlSwitchSub('calendar')">Calendar</button>
       <button class="jrnl-sub-tab" data-view="media" onclick="_jrnlSwitchSub('media')">Media</button>
@@ -22422,10 +22481,61 @@ const _GRAPH_FOLDER_COLORS = {
 };
 
 let _graphVaultPath = localStorage.getItem('amux_graph_vault') || '';
+let _graphSidebarOpen = (function() { try { return localStorage.getItem('amux_graph_sidebar') !== 'closed'; } catch(e) { return true; } })();
+
+function _graphToggleSidebar() {
+  _graphSidebarOpen = !_graphSidebarOpen;
+  localStorage.setItem('amux_graph_sidebar', _graphSidebarOpen ? 'open' : 'closed');
+  _graphApplySidebarState();
+}
+
+function _graphApplySidebarState() {
+  const view = document.getElementById('graph-view');
+  const sidebar = document.getElementById('graph-sidebar');
+  if (!view || !sidebar) return;
+  if (_graphSidebarOpen) {
+    sidebar.classList.remove('collapsed');
+    view.classList.remove('sidebar-collapsed');
+  } else {
+    sidebar.classList.add('collapsed');
+    view.classList.add('sidebar-collapsed');
+  }
+}
+
+function _graphRenderNodeList(filter) {
+  const list = document.getElementById('graph-node-list');
+  if (!list || !_graphData) return;
+  const q = (filter || '').toLowerCase();
+  const nodes = _graphData.nodes.filter(n => !q || n.label.toLowerCase().includes(q));
+  nodes.sort((a, b) => a.label.localeCompare(b.label));
+  if (!nodes.length) {
+    list.innerHTML = '<div style="padding:12px;color:var(--dim);font-size:0.78rem;text-align:center;">No nodes</div>';
+    return;
+  }
+  list.innerHTML = nodes.map(n => {
+    const color = n.color || '#888';
+    return '<div class="graph-node-item" onclick="_graphSelectNodeFromList(\'' + n.id + '\')">' +
+      '<span class="graph-node-dot" style="background:' + color + ';"></span>' +
+      '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(n.label) + '</span></div>';
+  }).join('');
+}
+
+function _graphSelectNodeFromList(id) {
+  const node = _graphData.nodes.find(n => n.id === id);
+  if (!node) return;
+  _graphOpenPanel(node);
+  // On mobile, collapse sidebar after selecting
+  if (window.innerWidth <= 600) { _graphSidebarOpen = false; _graphApplySidebarState(); }
+}
+
+function _graphSidebarSearch(q) {
+  _graphRenderNodeList(q);
+}
 
 async function _graphInit() {
   if (_graphInited) return;
   _graphInited = true;
+  _graphApplySidebarState();
   const inp = document.getElementById('graph-vault-path');
   if (inp && _graphVaultPath) inp.value = _graphVaultPath;
   await _graphLoad();
@@ -22440,6 +22550,7 @@ async function _graphLoad() {
     _graphRender();
     _graphBuildFilters();
     _graphUpdateStats();
+    _graphRenderNodeList();
     if (!_graphData.nodes.some(n => n.pinned)) _graphRunForce();
   } catch(e) { console.error('graph load', e); }
 }
@@ -22900,6 +23011,7 @@ let _jrnlEntries = [];
 let _jrnlAllEntries = [];
 let _jrnlActiveId = null;
 let _jrnlInited = false;
+let _jrnlSidebarOpen = (function() { try { return localStorage.getItem('amux_jrnl_sidebar') !== 'closed'; } catch(e) { return true; } })();
 let _jrnlSubView = 'list';
 let _jrnlSearchQ = '';
 let _jrnlActiveTag = '';
@@ -22912,12 +23024,32 @@ let _jrnlMarkers = null;
 async function _journalInit() {
   if (!_jrnlInited) {
     _jrnlInited = true;
+    _jrnlApplySidebarState();
     try {
       const r = await fetch('/api/journal/config');
       if (r.ok) _jrnlConfig = await r.json();
     } catch(e) {}
   }
   await _journalLoad();
+}
+
+function _jrnlToggleSidebar() {
+  _jrnlSidebarOpen = !_jrnlSidebarOpen;
+  localStorage.setItem('amux_jrnl_sidebar', _jrnlSidebarOpen ? 'open' : 'closed');
+  _jrnlApplySidebarState();
+}
+
+function _jrnlApplySidebarState() {
+  const view = document.getElementById('journal-view');
+  const sidebar = document.getElementById('jrnl-sidebar');
+  if (!view || !sidebar) return;
+  if (_jrnlSidebarOpen) {
+    sidebar.classList.remove('collapsed');
+    view.classList.remove('sidebar-collapsed');
+  } else {
+    sidebar.classList.add('collapsed');
+    view.classList.add('sidebar-collapsed');
+  }
 }
 
 async function _journalLoad() {
@@ -23016,6 +23148,7 @@ function _jrnlSelect(id) {
   _jrnlSwitchSub('list');
   _jrnlRenderSidebar();
   _jrnlRenderEditor();
+  if (window.innerWidth <= 600) { _jrnlSidebarOpen = false; _jrnlApplySidebarState(); }
 }
 
 function _jrnlNew() {
