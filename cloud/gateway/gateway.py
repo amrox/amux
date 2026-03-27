@@ -69,6 +69,24 @@ _LOGIN_HTML = """<!DOCTYPE html>
       padding: 8px 20px; font-size: 0.85rem; cursor: pointer; margin-top: 12px;
     }
     .retry-btn:hover { background: #444; }
+    .promo-toggle { color: #888; font-size: 0.82rem; cursor: pointer; text-decoration: underline; text-decoration-color: #444; text-underline-offset: 3px; }
+    .promo-toggle:hover { color: #aaa; }
+    .promo-box { display: none; margin-top: 4px; }
+    .promo-box.open { display: flex; }
+    .promo-input {
+      background: #1a1a1a; border: 1px solid #333; border-radius: 8px; color: #e5e5e5;
+      padding: 8px 12px; font-size: 0.85rem; flex: 1; outline: none;
+    }
+    .promo-input:focus { border-color: #555; }
+    .promo-input::placeholder { color: #555; }
+    .promo-apply {
+      background: #333; color: #e5e5e5; border: 1px solid #555; border-radius: 8px;
+      padding: 8px 14px; font-size: 0.85rem; cursor: pointer; margin-left: 6px; white-space: nowrap;
+    }
+    .promo-apply:hover { background: #444; }
+    .promo-msg { font-size: 0.8rem; margin-top: 4px; min-height: 1.2em; }
+    .promo-msg.ok { color: #34d399; }
+    .promo-msg.err { color: #f87171; }
   </style>
 </head>
 <body>
@@ -76,6 +94,14 @@ _LOGIN_HTML = """<!DOCTYPE html>
   <div id="clerk-root"></div>
   <div id="passcode-root" style="display:none;"></div>
   <div id="status"></div>
+  <div style="margin-top:12px;text-align:center;">
+    <span class="promo-toggle" onclick="document.getElementById('promo-box').classList.toggle('open')">Have a promo code?</span>
+    <div id="promo-box" class="promo-box" style="gap:6px;align-items:center;max-width:320px;margin:8px auto 0;">
+      <input id="promo-input" class="promo-input" type="text" placeholder="Enter promo code" autocomplete="off">
+      <button class="promo-apply" onclick="applyPromo()">Apply</button>
+    </div>
+    <div id="promo-msg" class="promo-msg"></div>
+  </div>
   <a href="https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;color:#888;font-size:0.82rem;text-decoration:none;margin-top:8px;">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
     Get the iOS App
@@ -130,6 +156,50 @@ _LOGIN_HTML = """<!DOCTYPE html>
       if (btn) btn.style.display = 'none';
     }
 
+    async function applyPromo() {
+      const input = document.getElementById('promo-input');
+      const msg = document.getElementById('promo-msg');
+      const code = input.value.trim();
+      if (!code) { msg.className = 'promo-msg err'; msg.textContent = 'Enter a code'; return; }
+      // If user is logged in, apply immediately; otherwise store for after login
+      try {
+        const res = await fetch('/api/gateway/promo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code })
+        });
+        if (res.status === 401) {
+          // Not logged in yet — save for after login
+          localStorage.setItem('amux_promo', code);
+          msg.className = 'promo-msg ok';
+          msg.textContent = 'Code saved \\u2014 it will be applied after you sign in.';
+          return;
+        }
+        const d = await res.json().catch(() => ({}));
+        if (res.ok) {
+          msg.className = 'promo-msg ok';
+          msg.textContent = 'Applied! +' + d.bonus_days + ' bonus days added.';
+          localStorage.removeItem('amux_promo');
+        } else {
+          msg.className = 'promo-msg err';
+          msg.textContent = d.error || 'Failed to apply code';
+        }
+      } catch(e) {
+        msg.className = 'promo-msg err';
+        msg.textContent = 'Network error \\u2014 try again';
+      }
+    }
+    // Enter key applies promo
+    document.getElementById('promo-input').addEventListener('keydown', e => { if (e.key === 'Enter') applyPromo(); });
+    // Pre-fill from URL param ?promo=CODE
+    (function() {
+      const p = new URLSearchParams(location.search).get('promo');
+      if (p) {
+        document.getElementById('promo-box').classList.add('open');
+        document.getElementById('promo-input').value = p;
+      }
+    })();
+
     async function exchangeAndRedirect() {
       if (exchanging) return;
       exchanging = true;
@@ -147,6 +217,20 @@ _LOGIN_HTML = """<!DOCTYPE html>
           body: JSON.stringify({ token, email })
         });
         if (res.ok) {
+          // Apply pending promo code after login
+          const pending = localStorage.getItem('amux_promo');
+          if (pending) {
+            localStorage.removeItem('amux_promo');
+            try {
+              const pr = await fetch('/api/gateway/promo', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ code: pending })
+              });
+              const pd = await pr.json().catch(() => ({}));
+              if (pr.ok) console.log('[promo] applied ' + pending + ': +' + pd.bonus_days + ' days');
+            } catch(_) {}
+          }
           window.location.replace(POST_LOGIN_REDIRECT || '/');
         } else {
           const d = await res.json().catch(() => ({}));
@@ -585,6 +669,27 @@ def get_db():
     for row in conn.execute("SELECT id FROM users WHERE referral_code IS NULL"):
         conn.execute("UPDATE users SET referral_code=? WHERE id=?",
                      (_secrets.token_urlsafe(6), row["id"]))
+    conn.commit()
+    # ── Promo codes ──
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS promo_codes (
+            code        TEXT PRIMARY KEY,
+            bonus_days  INTEGER NOT NULL DEFAULT 7,
+            max_uses    INTEGER DEFAULT NULL,
+            used_count  INTEGER NOT NULL DEFAULT 0,
+            expires_at  INTEGER DEFAULT NULL,
+            created_at  INTEGER NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS promo_redemptions (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            code        TEXT NOT NULL,
+            user_id     TEXT NOT NULL,
+            created_at  INTEGER NOT NULL,
+            UNIQUE(code, user_id)
+        )
+    """)
     conn.commit()
     return conn
 
@@ -1325,18 +1430,17 @@ class Handler(BaseHTTPRequestHandler):
                     return self._serve_login(post_login_redirect=f"/invite/{invite_token}")
 
         # ── Resolve user: Bearer token OR session cookie ──
+        # Bearer (Clerk JWT) is tried first; on failure fall through to cookie
+        # so that container-injected AUTH_TOKEN headers don't block cookie auth.
         user_id = None
         email   = ""
         auth = self.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
             try:
                 user_id, email = verify_clerk_token(auth[7:])
-            except Exception as e:
-                client_ip = self.headers.get("X-Forwarded-For", self.client_address[0])
-                ua = self.headers.get("User-Agent", "")[:80]
-                print(f"[auth-error] Bearer verify failed: path={path} err={e} ip={client_ip} ua={ua}", flush=True)
-                return self._json({"error": f"invalid token: {e}"}, 401)
-        else:
+            except Exception:
+                pass  # fall through to cookie auth
+        if not user_id:
             cookies = _parse_cookies(self.headers.get("Cookie", ""))
             session_val = cookies.get("amux_session", "")
             if session_val:
@@ -1348,13 +1452,13 @@ class Handler(BaseHTTPRequestHandler):
                     if "text/html" in accept or not path.startswith("/api/"):
                         return self._serve_login()
                     return self._json({"error": "session expired"}, 401)
-            else:
-                accept = self.headers.get("Accept", "")
-                cookie_header = self.headers.get("Cookie", "")
-                print(f"[auth] No amux_session cookie for {path} accept={accept[:40]} cookies={cookie_header[:60]}", flush=True)
-                if "text/html" in accept or not path.startswith("/api/"):
-                    return self._serve_login()
-                return self._json({"error": "unauthorized"}, 401)
+        if not user_id:
+            accept = self.headers.get("Accept", "")
+            cookie_header = self.headers.get("Cookie", "")
+            print(f"[auth] No valid auth for {path} accept={accept[:40]} cookies={cookie_header[:60]}", flush=True)
+            if "text/html" in accept or not path.startswith("/api/"):
+                return self._serve_login()
+            return self._json({"error": "unauthorized"}, 401)
 
         # Upsert user
         db = get_db()
@@ -1809,6 +1913,69 @@ class Handler(BaseHTTPRequestHandler):
                 "WHERE r.referrer_id=? ORDER BY r.created_at DESC", (user_id,)
             ).fetchall()
             return self._json({"referrals": [dict(r) for r in rows], "count": len(rows)})
+
+        # ── Promo code: redeem ───────────────────────────────────────────────
+        if path == "/api/gateway/promo" and self.command == "POST":
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            code = body.get("code", "").strip()
+            if not code:
+                return self._json({"error": "code is required"}, 400)
+            now = int(time.time())
+            with _db_lock:
+                promo = db.execute("SELECT * FROM promo_codes WHERE code=?", (code,)).fetchone()
+                if not promo:
+                    return self._json({"error": "invalid promo code"}, 404)
+                if promo["expires_at"] and now > promo["expires_at"]:
+                    return self._json({"error": "promo code has expired"}, 410)
+                if promo["max_uses"] and promo["used_count"] >= promo["max_uses"]:
+                    return self._json({"error": "promo code has been fully redeemed"}, 410)
+                # Check if user already redeemed this code
+                existing = db.execute(
+                    "SELECT 1 FROM promo_redemptions WHERE code=? AND user_id=?", (code, user_id)
+                ).fetchone()
+                if existing:
+                    return self._json({"error": "you already redeemed this code"}, 409)
+                bonus = promo["bonus_days"] * 86400
+                org_id = _active_org_id()
+                db.execute(
+                    "INSERT INTO promo_redemptions (code, user_id, created_at) VALUES (?,?,?)",
+                    (code, user_id, now))
+                db.execute("UPDATE promo_codes SET used_count = used_count + 1 WHERE code=?", (code,))
+                db.execute("UPDATE orgs SET trial_ends_at = MAX(trial_ends_at, ?) + ? WHERE id=?",
+                           (now, bonus, org_id))
+                db.commit()
+            print(f"[promo] {user_email} redeemed code '{code}' for +{promo['bonus_days']} days", flush=True)
+            return self._json({"ok": True, "bonus_days": promo["bonus_days"]})
+
+        # ── Admin: promo code management ─────────────────────────────────────
+        if path == "/api/gateway/admin/promo" and self.command == "POST":
+            if not ADMIN_EMAILS or user_email not in ADMIN_EMAILS:
+                return self._json({"error": "forbidden"}, 403)
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            code = body.get("code", "").strip()
+            bonus_days = int(body.get("bonus_days", 7))
+            max_uses = body.get("max_uses")  # None = unlimited
+            expires_at = body.get("expires_at")  # Unix timestamp or None
+            if not code:
+                return self._json({"error": "code is required"}, 400)
+            now = int(time.time())
+            try:
+                db.execute(
+                    "INSERT INTO promo_codes (code, bonus_days, max_uses, expires_at, created_at) VALUES (?,?,?,?,?)",
+                    (code, bonus_days, max_uses, expires_at, now))
+                db.commit()
+            except sqlite3.IntegrityError:
+                return self._json({"error": "code already exists"}, 409)
+            print(f"[promo] admin created code '{code}' bonus={bonus_days}d max_uses={max_uses}", flush=True)
+            return self._json({"ok": True, "code": code, "bonus_days": bonus_days})
+
+        if path == "/api/gateway/admin/promos" and self.command == "GET":
+            if not ADMIN_EMAILS or user_email not in ADMIN_EMAILS:
+                return self._json({"error": "forbidden"}, 403)
+            rows = db.execute("SELECT * FROM promo_codes ORDER BY created_at DESC").fetchall()
+            return self._json({"promo_codes": [dict(r) for r in rows]})
 
         # ── Admin: gateway logs ───────────────────────────────────────────────
         if path.startswith("/api/gateway/logs") and self.command == "GET":
