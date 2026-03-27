@@ -1118,6 +1118,15 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _serve_login(self, post_login_redirect="/"):
+        from urllib.parse import urlparse, urlencode
+        req_path = urlparse(self.path).path
+        # With Clerk path routing, the sign-in component only renders at /sign-in.
+        # Redirect non-/sign-in paths so Clerk mounts properly.
+        if not req_path.startswith("/sign-in"):
+            redir = "/sign-in"
+            if post_login_redirect and post_login_redirect != "/":
+                redir += "?redirect=" + post_login_redirect
+            return self._redirect(redir)
         html = (_LOGIN_HTML
                 .replace("__CLERK_PK__", CLERK_PUBLISHABLE_KEY)
                 .replace("__POST_LOGIN_REDIRECT__", post_login_redirect))
@@ -1193,7 +1202,9 @@ class Handler(BaseHTTPRequestHandler):
 
         # ── Public: Clerk path-based routing (sign-in/sign-up sub-pages) ──
         if path.startswith("/sign-in") or path.startswith("/sign-up"):
-            return self._serve_login(post_login_redirect="/")
+            from urllib.parse import parse_qs
+            redirect = parse_qs(qs).get("redirect", ["/"])[0]
+            return self._serve_login(post_login_redirect=redirect)
 
         # ── Public: shared session links — /s/<token> and /api/share/<token>/* ──
         if path.startswith("/s/") or path.startswith("/api/share/"):
