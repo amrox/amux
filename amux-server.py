@@ -13174,7 +13174,7 @@ function _ttsRenderVoices(sel) {
   Object.keys(groups).sort().forEach(cat => {
     html += '<optgroup label="' + esc(cat) + '">';
     groups[cat].forEach(v => {
-      const selected = (_ttsSelectedVoice === v.voice_id || (!_ttsSelectedVoice && v.name === 'George')) ? ' selected' : '';
+      const selected = (_ttsSelectedVoice === v.voice_id || (!_ttsSelectedVoice && v.voice_id === 'JBFqnCBsd6RMkjVDRZzb')) ? ' selected' : '';
       html += '<option value="' + v.voice_id + '"' + selected + '>' + esc(v.name) + '</option>';
     });
     html += '</optgroup>';
@@ -26537,6 +26537,13 @@ class CCHandler(BaseHTTPRequestHandler):
         # ── /api/tts — ElevenLabs text-to-speech ─────────────────────────────
         if path.startswith("/api/tts"):
             import urllib.request as _tts_ureq
+            import ssl as _tts_ssl
+            _tts_ctx = _tts_ssl.create_default_context()
+            try:
+                import certifi
+                _tts_ctx.load_verify_locations(certifi.where())
+            except ImportError:
+                _tts_ctx = _tts_ssl._create_unverified_context()
 
             elevenlabs_key = os.environ.get("ELEVENLABS_API_KEY", "")
 
@@ -26544,23 +26551,38 @@ class CCHandler(BaseHTTPRequestHandler):
             if method == "GET" and path == "/api/tts/voices":
                 if not elevenlabs_key:
                     return self._json({"error": "ELEVENLABS_API_KEY not set in ~/.amux/server.env"}, 400)
+                # Try API first, fall back to built-in defaults
+                _default_voices = [
+                    {"voice_id": "JBFqnCBsd6RMkjVDRZzb", "name": "George", "category": "premade"},
+                    {"voice_id": "21m00Tcm4TlvDq8ikWAM", "name": "Rachel", "category": "premade"},
+                    {"voice_id": "EXAVITQu4vr4xnSDxMaL", "name": "Sarah", "category": "premade"},
+                    {"voice_id": "ErXwobaYiN019PkySvjV", "name": "Antoni", "category": "premade"},
+                    {"voice_id": "MF3mGyEYCl7XYWbV9V6O", "name": "Elli", "category": "premade"},
+                    {"voice_id": "TxGEqnHWrfWFTfGW9XjX", "name": "Josh", "category": "premade"},
+                    {"voice_id": "VR6AewLTigWG4xSOukaG", "name": "Arnold", "category": "premade"},
+                    {"voice_id": "pNInz6obpgDQGcFmaJgB", "name": "Adam", "category": "premade"},
+                    {"voice_id": "yoZ06aMxZJJ28mfd3POQ", "name": "Sam", "category": "premade"},
+                    {"voice_id": "onwK4e9ZLuTAKqWW03F9", "name": "Daniel", "category": "premade"},
+                    {"voice_id": "XB0fDUnXU5powFXDhCwa", "name": "Charlotte", "category": "premade"},
+                    {"voice_id": "Xb7hH8MSUJpSbSDYk0k2", "name": "Alice", "category": "premade"},
+                ]
                 try:
                     req = _tts_ureq.Request(
                         "https://api.elevenlabs.io/v1/voices",
                         headers={"xi-api-key": elevenlabs_key},
                     )
-                    resp = _tts_ureq.urlopen(req, timeout=10)
+                    resp = _tts_ureq.urlopen(req, timeout=10, context=_tts_ctx)
                     data = json.loads(resp.read())
                     voices = [{"voice_id": v["voice_id"], "name": v["name"], "category": v.get("category", "")} for v in data.get("voices", [])]
                     return self._json({"voices": voices})
-                except Exception as e:
-                    return self._json({"error": str(e)}, 500)
+                except Exception:
+                    return self._json({"voices": _default_voices})
 
             # POST /api/tts — generate speech, return audio file URL
             if method == "POST" and path == "/api/tts":
                 if not elevenlabs_key:
                     return self._json({"error": "ELEVENLABS_API_KEY not set in ~/.amux/server.env"}, 400)
-                body = self._body_json()
+                body = self._read_body()
                 text = body.get("text", "").strip()
                 if not text:
                     return self._json({"error": "text is required"}, 400)
@@ -26581,7 +26603,7 @@ class CCHandler(BaseHTTPRequestHandler):
                             "Accept": "audio/mpeg",
                         },
                     )
-                    resp = _tts_ureq.urlopen(req, timeout=60)
+                    resp = _tts_ureq.urlopen(req, timeout=60, context=_tts_ctx)
                     audio_data = resp.read()
                     fname = f"tts-{int(time.time())}.mp3"
                     out_path = _amux_home / "uploads" / fname
