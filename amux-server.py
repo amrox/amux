@@ -20903,7 +20903,18 @@ function _playVideoUrl(url, title) {
   const v = document.getElementById('video-player');
   const status = document.getElementById('vp-status');
 
-  v.src = _authUrl(url);
+  // MKV/AVI can't play natively — use server-side transcode to MP4
+  const ext = url.split('?')[0].split('.').pop().toLowerCase();
+  const needsTranscode = ['mkv', 'avi'].includes(ext);
+  if (needsTranscode) {
+    // Extract path and cwd params from the raw URL to build transcode URL
+    const u = new URL(url, location.origin);
+    const tUrl = API + '/api/file/transcode?path=' + encodeURIComponent(u.searchParams.get('path') || '')
+      + (u.searchParams.get('cwd') ? '&cwd=' + encodeURIComponent(u.searchParams.get('cwd')) : '');
+    v.src = _authUrl(tUrl);
+  } else {
+    v.src = _authUrl(url);
+  }
   v._vpUrl = url;
 
   document.getElementById('vp-title').textContent = title || url.split('/').pop();
@@ -25857,6 +25868,55 @@ class CCHandler(BaseHTTPRequestHandler):
                         if not chunk:
                             break
                         self.wfile.write(chunk)
+            return
+
+        # GET /api/file/transcode?path=...&cwd=...  — remux MKV/AVI → MP4 via ffmpeg
+        if method == "GET" and path == "/api/file/transcode":
+            import subprocess as _sp, shutil as _sh
+            fpath = qs.get("path", [""])[0]
+            cwd = qs.get("cwd", [""])[0]
+            if not fpath:
+                return self._json({"error": "missing path"}, 400)
+            p = Path(fpath).expanduser()
+            if not p.is_absolute() and cwd:
+                p = Path(cwd).expanduser() / p
+            elif not p.is_absolute():
+                return self._json({"error": "relative path without cwd"}, 400)
+            if not _is_path_allowed(p):
+                return self._json({"error": "access denied"}, 403)
+            if not p.is_file():
+                return self._json({"error": "file not found"}, 404)
+            if not _sh.which("ffmpeg"):
+                return self._json({"error": "ffmpeg not installed"}, 500)
+            # Stream ffmpeg output directly — remux (copy streams) first, works for h264/h265+aac in mkv
+            # Use -movflags frag_keyframe+empty_moov for streaming fragmented MP4 (no seek needed)
+            cmd = [
+                "ffmpeg", "-i", str(p), "-f", "mp4",
+                "-c:v", "copy", "-c:a", "aac",  # copy video, transcode audio to aac if needed
+                "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+                "-loglevel", "error", "-y", "pipe:1"
+            ]
+            try:
+                proc = _sp.Popen(cmd, stdout=_sp.PIPE, stderr=_sp.PIPE)
+                self.send_response(200)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Transfer-Encoding", "chunked")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                while True:
+                    chunk = proc.stdout.read(65536)
+                    if not chunk:
+                        break
+                    # HTTP chunked encoding
+                    self.wfile.write(f"{len(chunk):x}\r\n".encode())
+                    self.wfile.write(chunk)
+                    self.wfile.write(b"\r\n")
+                self.wfile.write(b"0\r\n\r\n")
+                proc.wait()
+                if proc.returncode != 0:
+                    log.warning("ffmpeg transcode failed: %s", proc.stderr.read().decode(errors="replace")[:500])
+            except Exception as e:
+                log.error("transcode error: %s", e)
             return
 
         # GET /api/autocomplete/dir?q=...
