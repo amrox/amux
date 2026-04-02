@@ -8463,6 +8463,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <button class="fe-tb-btn" id="files-hidden-btn" onclick="toggleFilesHidden()" title="Show hidden files">
         <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M1 6.5C1 6.5 3 3 6.5 3S12 6.5 12 6.5 10 10 6.5 10 1 6.5 1 6.5Z" stroke="currentColor" stroke-width="1.3"/><circle cx="6.5" cy="6.5" r="1.5" stroke="currentColor" stroke-width="1.3"/></svg>
       </button>
+      <button class="fe-tb-btn" onclick="_filesNewFile()" title="New file">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M7 1H3a1 1 0 00-1 1v9a1 1 0 001 1h7a1 1 0 001-1V5L7 1z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" fill="none"/><path d="M7 1v4h4M6.5 7v4M4.5 9h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
       <button class="fe-tb-btn" onclick="triggerFilesUpload()" title="Upload files">
         <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M6.5 9V3M3.5 5.5l3-3 3 3M2 10.5h9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
@@ -8498,6 +8501,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
           <span id="files-hidden-oitem-label">Show hidden files</span>
         </button>
         <div class="fe-tb-odivider"></div>
+        <button class="fe-tb-oitem" onclick="_filesNewFile();_filesOverflowClose()">
+          <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M7 1H3a1 1 0 00-1 1v9a1 1 0 001 1h7a1 1 0 001-1V5L7 1z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" fill="none"/><path d="M7 1v4h4M6.5 7v4M4.5 9h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          New file
+        </button>
         <button class="fe-tb-oitem" onclick="triggerFilesUpload();_filesOverflowClose()">
           <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M6.5 9V3M3.5 5.5l3-3 3 3M2 10.5h9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Upload files
@@ -14117,7 +14124,7 @@ function _renderFileBody(data, mode) {
   // Text files — Raw / Edit / Preview
   const editWrap = document.getElementById('file-edit-wrap');
   const editTa = document.getElementById('file-edit-ta');
-  if (mode === 'edit' && data.is_markdown) {
+  if (mode === 'edit' && (data.is_markdown || data._isNew)) {
     body.style.display = 'none';
     editWrap.style.display = 'flex';
     editTa.value = data.content;
@@ -14195,7 +14202,7 @@ function setFileViewMode(mode) {
   document.getElementById('file-tab-raw').classList.toggle('active', mode === 'raw');
   const editTab = document.getElementById('file-tab-edit');
   if (editTab) editTab.classList.toggle('active', mode === 'edit');
-  document.getElementById('file-save-btn').style.display = (mode === 'edit' && _fileData && _fileData.is_markdown) ? '' : 'none';
+  document.getElementById('file-save-btn').style.display = (mode === 'edit' && _fileData && (_fileData.is_markdown || _fileData._isNew)) ? '' : 'none';
   if (_fileData) _renderFileBody(_fileData, mode);
 }
 
@@ -14270,7 +14277,7 @@ function closeFilePreview() {
 }
 
 async function _fileSave() {
-  if (!_fileData || !_fileData.is_markdown) return;
+  if (!_fileData || (!_fileData.is_markdown && !_fileData._isNew)) return;
   const ta = document.getElementById('file-edit-ta');
   const btn = document.getElementById('file-save-btn');
   const content = ta.value;
@@ -14284,11 +14291,16 @@ async function _fileSave() {
     });
     const d = await r.json();
     if (d.ok) {
-      _fileData.content = content; // keep in sync
+      _fileData.content = content;
+      if (_fileData._isNew) {
+        _fileData._isNew = false;
+        document.getElementById('file-title').textContent = _fileData.path.split('/').pop();
+        loadFiles(_filesPath); // refresh file list
+      }
       btn.textContent = 'Saved!';
       setTimeout(() => { btn.textContent = 'Save'; btn.classList.remove('saving'); }, 1500);
     } else {
-      btn.textContent = 'Error';
+      btn.textContent = d.error || 'Error';
       btn.classList.remove('saving');
       setTimeout(() => { btn.textContent = 'Save'; }, 2000);
     }
@@ -14600,6 +14612,32 @@ function _filesSearchFilter(q) {
   if (!body || !_filesLastData) return;
   const { path, data, cacheTs } = _filesLastData;
   _renderFilesEntries(body, path, data, cacheTs);
+}
+
+function _filesNewFile() {
+  const name = prompt('File name (e.g. notes.txt, script.py, data.json):');
+  if (!name || !name.trim()) return;
+  const fname = name.trim();
+  const fpath = (_filesPath || '/').replace(/\/$/, '') + '/' + fname;
+  // Open the file overlay in edit mode with empty content
+  _fileData = { path: fpath, content: '', is_markdown: /\.md$/i.test(fname), _isNew: true };
+  _fileViewMode = 'edit';
+  document.getElementById('file-title').textContent = fname + ' (new)';
+  document.getElementById('file-body').className = 'file-overlay-body';
+  document.getElementById('file-body').style.display = 'none';
+  document.getElementById('file-view-tabs').style.display = '';
+  document.getElementById('file-tab-preview').classList.remove('active');
+  document.getElementById('file-tab-raw').classList.remove('active');
+  const editTab = document.getElementById('file-tab-edit');
+  if (editTab) { editTab.style.display = ''; editTab.classList.add('active'); }
+  document.getElementById('file-save-btn').style.display = '';
+  document.getElementById('file-download-btn').style.display = 'none';
+  const ta = document.getElementById('file-edit-ta');
+  const wrap = document.getElementById('file-edit-wrap');
+  ta.value = '';
+  wrap.style.display = '';
+  document.getElementById('file-overlay').classList.add('active');
+  setTimeout(() => ta.focus(), 100);
 }
 
 function triggerFilesUpload() {
@@ -25933,9 +25971,19 @@ class CCHandler(BaseHTTPRequestHandler):
                 return self._json({"error": "access denied"}, 403)
             WRITABLE_EXTS = {".md", ".markdown", ".mdx", ".txt", ".json",
                              ".yml", ".yaml", ".toml", ".ini", ".cfg",
-                             ".sh", ".py", ".js", ".ts", ".css", ".html", ".htm"}
-            if p.suffix.lower() not in WRITABLE_EXTS:
-                return self._json({"error": "file type not writable"}, 400)
+                             ".sh", ".bash", ".zsh", ".py", ".js", ".ts", ".jsx", ".tsx",
+                             ".mjs", ".cjs", ".css", ".scss", ".less", ".html", ".htm",
+                             ".xml", ".svg", ".csv", ".sql", ".graphql", ".proto",
+                             ".go", ".rs", ".java", ".rb", ".php", ".swift", ".kt",
+                             ".c", ".cpp", ".h", ".cs", ".r", ".lua", ".pl",
+                             ".env", ".gitignore", ".dockerignore",
+                             ".tf", ".hcl", ".conf", ".log", ".makefile"}
+            ext = p.suffix.lower()
+            # Allow extensionless files and common text extensions
+            if ext and ext not in WRITABLE_EXTS:
+                return self._json({"error": "file type not writable: " + ext}, 400)
+            # Create parent directories if they don't exist (for new files)
+            p.parent.mkdir(parents=True, exist_ok=True)
             try:
                 p.write_text(body.get("content", ""))
                 return self._json({"ok": True, "path": str(p)})
