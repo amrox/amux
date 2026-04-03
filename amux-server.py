@@ -1293,6 +1293,45 @@ def _reap_stale_browsers():
         pass
 
 
+# ── Ray Serve killer — Ray should never be running locally for extended periods ──
+_last_ray_check = 0.0
+
+def _kill_stale_ray():
+    """Kill Ray Serve if it's been running for more than 30 minutes.
+    Sessions occasionally start Ray for local testing but never stop it,
+    consuming massive CPU/RAM (multiple ML model workers)."""
+    global _last_ray_check
+    now = time.time()
+    if now - _last_ray_check < 600:
+        return
+    _last_ray_check = now
+    try:
+        r = subprocess.run(["pgrep", "-f", "ray::ServeController"],
+                           capture_output=True, text=True, timeout=5)
+        if not r.stdout.strip():
+            return
+        pid = r.stdout.strip().split("\n")[0]
+        r2 = subprocess.run(["ps", "-o", "etime=", "-p", pid],
+                            capture_output=True, text=True, timeout=5)
+        etime = r2.stdout.strip()
+        if not etime:
+            return
+        parts = etime.replace("-", ":").split(":")
+        parts = [int(p) for p in parts]
+        if len(parts) == 2: secs = parts[0]*60 + parts[1]
+        elif len(parts) == 3: secs = parts[0]*3600 + parts[1]*60 + parts[2]
+        elif len(parts) == 4: secs = parts[0]*86400 + parts[1]*3600 + parts[2]*60 + parts[3]
+        else: return
+        if secs > 1800:  # > 30 minutes
+            subprocess.run("pkill -9 -f 'ray::' 2>/dev/null; pkill -9 -f 'ray/core/src/ray' 2>/dev/null; "
+                           "pkill -9 -f 'ray/dashboard' 2>/dev/null; pkill -9 -f 'ray/autoscaler' 2>/dev/null; "
+                           "pkill -9 -f 'ray.util.client' 2>/dev/null",
+                           shell=True, timeout=15)
+            slog(f"[ray-reaper] killed Ray Serve cluster — was running for {secs//60}m")
+    except Exception:
+        pass
+
+
 def get_claude_stats(work_dir: str) -> dict:
     """Get token usage and last activity from Claude Code session files for a directory."""
     if not work_dir:
@@ -7345,14 +7384,14 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   /* Notes view */
   #notes-view { height: calc(100vh - 110px); }
   .notes-sidebar {
-    width: 220px; min-width: 160px; border-right: 1px solid var(--border);
+    width: 240px; min-width: 180px; border-right: 1px solid var(--border);
     display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0;
-    background: var(--card); transition: width 0.2s ease, min-width 0.2s ease, border 0.2s ease;
+    background: var(--bg); transition: width 0.2s ease, min-width 0.2s ease, border 0.2s ease;
   }
   .notes-sidebar.collapsed { width: 0; min-width: 0; border-right: none; }
   .notes-sidebar-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 10px 12px 6px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+    padding: 10px 12px 6px; flex-shrink: 0;
   }
   .notes-sidebar-actions { display: flex; gap: 4px; align-items: center; }
   .notes-toggle-btn {
@@ -7373,7 +7412,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   }
   .notes-expand-btn:hover { background: rgba(139,148,158,0.12); color: var(--text); }
   #notes-view.sidebar-collapsed .notes-expand-btn { display: flex; }
-  .notes-search-wrap { padding: 6px 8px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .notes-search-wrap { padding: 4px 8px 8px; flex-shrink: 0; }
   .notes-list { flex: 1; overflow-y: auto; }
   .notes-trash-section { flex-shrink: 0; border-top: 1px solid var(--border); }
   .notes-trash-header {
@@ -7410,14 +7449,15 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     #notes-view.sidebar-collapsed .notes-expand-btn { display: flex; }
   }
   .notes-list-item {
-    padding: 8px 12px; cursor: pointer; border-bottom: 1px solid rgba(139,148,158,0.1);
-    font-size: 0.82rem; color: var(--text); line-height: 1.3;
-    transition: background 0.1s; touch-action: manipulation; user-select: none; -webkit-user-select: none;
+    padding: 5px 12px; cursor: pointer;
+    font-size: 0.82rem; color: var(--text); line-height: 1.4;
+    transition: background 0.08s; touch-action: manipulation; user-select: none; -webkit-user-select: none;
+    border-radius: 4px; margin: 1px 6px;
   }
   .notes-list-item:hover { background: rgba(139,148,158,0.08); }
   .notes-list-item.active { background: rgba(88,166,255,0.12); color: var(--accent); }
   .notes-list-item .nli-title { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .notes-list-item .nli-date { font-size: 0.7rem; color: var(--dim); margin-top: 2px; }
+  .notes-list-item .nli-date { display: none; }
   .notes-list-empty { padding: 16px 12px; color: var(--dim); font-size: 0.8rem; text-align: center; }
   .notes-folder-hdr {
     display: flex; align-items: center; gap: 5px; padding: 6px 10px 4px;
@@ -7456,13 +7496,13 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative;
   }
   .notes-editor-header {
-    display: flex; align-items: center; gap: 8px; padding: 8px 12px;
-    border-bottom: 1px solid var(--border); flex-shrink: 0;
+    display: flex; align-items: center; gap: 8px; padding: 10px 16px 8px;
+    flex-shrink: 0;
   }
   .notes-title-input {
     flex: 1; background: transparent; border: none; outline: none;
-    color: var(--text); font-size: 0.95rem; font-weight: 600;
-    font-family: inherit;
+    color: var(--text); font-size: 1.15rem; font-weight: 700;
+    font-family: inherit; letter-spacing: -0.01em;
   }
   .notes-delete-btn {
     background: transparent; border: none; color: var(--dim); cursor: pointer;
@@ -7474,12 +7514,19 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   /* Quill editor fills pane */
   .notes-quill-wrap { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
   .notes-quill-wrap .ql-toolbar.ql-snow {
-    background: var(--card); border-color: var(--border); flex-shrink: 0;
+    background: var(--bg); border: none; border-bottom: 1px solid var(--border); flex-shrink: 0;
+    opacity: 0; max-height: 0; overflow: hidden; transition: opacity 0.15s, max-height 0.15s;
+    padding: 4px 8px;
+  }
+  .notes-quill-wrap:hover .ql-toolbar.ql-snow,
+  .notes-quill-wrap:focus-within .ql-toolbar.ql-snow,
+  .notes-quill-wrap .ql-toolbar.ql-snow.pinned {
+    opacity: 1; max-height: 50px;
   }
   .notes-quill-wrap .ql-container.ql-snow {
-    border-color: var(--border); flex: 1; overflow-y: auto; background: var(--bg);
+    border: none; flex: 1; overflow-y: auto; background: var(--bg);
   }
-  .notes-quill-wrap .ql-editor { color: var(--text); font-size: 0.88rem; line-height: 1.7; min-height: 200px; }
+  .notes-quill-wrap .ql-editor { color: var(--text); font-size: 0.92rem; line-height: 1.75; min-height: 200px; padding: 8px 20px 60px; max-width: 720px; }
   .notes-quill-wrap .ql-editor hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
   .notes-quill-wrap .ql-snow .ql-toolbar .ql-divider { width: 28px; font-size: 0.75rem; color: var(--dim); font-weight: 600; }
   .notes-quill-wrap .ql-snow .ql-toolbar .ql-divider::after { content: '—'; }
@@ -7510,16 +7557,15 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   }
   /* Edit / Preview mode tabs */
   .notes-mode-tabs {
-    display: flex; gap: 2px; padding: 5px 12px; border-bottom: 1px solid var(--border);
-    flex-shrink: 0; background: var(--card);
+    display: flex; gap: 2px; padding: 3px 16px; flex-shrink: 0;
   }
   .notes-mode-tab {
-    background: none; border: none; padding: 4px 14px; border-radius: 5px;
-    font-size: 0.78rem; cursor: pointer; color: var(--dim); font-weight: 500;
-    transition: background 0.12s, color 0.12s;
+    background: none; border: none; padding: 3px 10px; border-radius: 4px;
+    font-size: 0.72rem; cursor: pointer; color: var(--dim); font-weight: 500;
+    transition: background 0.1s, color 0.1s; text-transform: uppercase; letter-spacing: 0.04em;
   }
-  .notes-mode-tab.active { background: var(--accent); color: #fff; }
-  .notes-mode-tab:not(.active):hover { background: rgba(139,148,158,0.12); color: var(--text); }
+  .notes-mode-tab.active { background: rgba(88,166,255,0.12); color: var(--accent); }
+  .notes-mode-tab:not(.active):hover { background: rgba(139,148,158,0.08); color: var(--text); }
   /* Preview pane */
   .notes-preview {
     flex: 1; overflow-y: auto; padding: 20px 24px; background: var(--bg);
@@ -21924,6 +21970,22 @@ function _notesFolderInputKey(e) {
   else if (e.key === 'Escape') { e.preventDefault(); _notesFolderCancel(); }
 }
 
+// ── Notes keyboard shortcuts ──
+document.addEventListener('keydown', e => {
+  if (activeView !== 'notes') return;
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && e.key === 'n' && !e.shiftKey) { e.preventDefault(); _notesNew(); }
+  if (mod && e.key === 's') { e.preventDefault(); if (_notesSaveTimer) { clearTimeout(_notesSaveTimer); _notesSaveTimer = null; } _notesSave(); }
+  if (mod && e.key === 'p') { e.preventDefault(); _notesQuickOpen(); }
+});
+
+function _notesQuickOpen() {
+  const q = prompt('Open note:');
+  if (!q) return;
+  const match = _notesAllNotes.find(n => n.name.toLowerCase().includes(q.toLowerCase()) || n.path.toLowerCase().includes(q.toLowerCase()));
+  if (match) _notesOpen(match.path);
+}
+
 // ── Notes drag-and-drop ──
 let _notesDraggingPath = null;
 
@@ -22103,7 +22165,7 @@ async function _notesOpen(path) {
   document.querySelectorAll('#notes-list .notes-list-item').forEach(el => {
     el.classList.toggle('active', el.dataset.path === path);
   });
-  if (_quill) { _quill.setText(''); _quill.root.style.opacity = '0.3'; }
+  if (_quill) { _quill.setText(''); }
   document.getElementById('notes-save-status').textContent = '';
 
   let data;
@@ -22135,10 +22197,8 @@ async function _notesOpen(path) {
   // Keep sidebar list name in sync with derived title
   const listEntry = _notesAllNotes.find(n => n.path === data.path);
   if (listEntry) listEntry.name = _notesActive.title;
-  // Load into Quill with a brief fade for smoothness
+  // Load into Quill instantly (no fade)
   if (!_quill) _notesInitQuill();
-  const quillRoot = _quill.root;
-  quillRoot.style.opacity = '0';
   const isHtml = /<[a-z][\s\S]*>/i.test(data.content);
   _notesLoadingContent = true;
   if (isHtml) {
@@ -22149,7 +22209,6 @@ async function _notesOpen(path) {
   setTimeout(() => { _notesLoadingContent = false; }, 0);
   document.getElementById('notes-empty-state').style.display = 'none';
   document.getElementById('notes-mode-tabs').style.display = 'flex';
-  // Always show edit mode when switching notes
   _notesMode = 'edit';
   document.getElementById('notes-tab-edit').classList.add('active');
   document.getElementById('notes-tab-preview').classList.remove('active');
@@ -22157,7 +22216,6 @@ async function _notesOpen(path) {
   const previewEl = document.getElementById('notes-preview');
   previewEl.innerHTML = '';
   previewEl.classList.remove('active');
-  quillRoot.style.opacity = '1';
   _notesSidebarUpdateActive(path);
   _notesUpdatePinBtn();
   document.getElementById('notes-save-status').textContent = '';
@@ -22225,7 +22283,7 @@ function _notesTitleChange() {
 
 function _notesSaveDebounce() {
   if (_notesSaveTimer) clearTimeout(_notesSaveTimer);
-  _notesSaveTimer = setTimeout(_notesSave, 800);
+  _notesSaveTimer = setTimeout(_notesSave, 400);
 }
 
 async function _notesSave() {
@@ -29417,6 +29475,18 @@ def main():
     lan_ip = get_lan_ip()
     no_tls = "--no-tls" in sys.argv
 
+    # Raise file descriptor limit — with 60+ sessions we need headroom for
+    # tmux subprocesses, log pipes, SSE connections, and SQLite
+    try:
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        target = min(hard, 10240)
+        if soft < target:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+            slog(f"[init] raised fd limit: {soft} → {target}")
+    except Exception:
+        pass
+
     # Kill any stale server process holding our port (e.g. zombie from Amux.app)
     _kill_stale_port(port)
 
@@ -29536,6 +29606,7 @@ def main():
     schedule_job(_yolo_loop,             interval=3,                    name="yolo",        initial_delay=3)
     schedule_job(_snapshot_loop,         interval=60,                   name="snapshot",    initial_delay=0)
     schedule_job(_reap_stale_browsers,  interval=600,                  name="browser_reap", initial_delay=60)
+    schedule_job(_kill_stale_ray,        interval=600,                  name="ray_reap",     initial_delay=120)
     schedule_job(_refresh_token_cache,   interval=120,                  name="token_cache", initial_delay=5)
     schedule_job(_email_sync_job,        interval=_EMAIL_SYNC_INTERVAL, name="email_sync",  initial_delay=20)
     schedule_job(_cleanup_tmp,           interval=1800,                 name="tmp_cleanup", initial_delay=60)
