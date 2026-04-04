@@ -12490,7 +12490,8 @@ function stripAnsi(text) {
     .replace(/\x1b\][^\x07]*\x07/g, '')        // OSC sequences (BEL terminated)
     .replace(/\x1b\][^\x1b]*\x1b\\/g, '')      // OSC sequences (ST terminated)
     .replace(/\x1b[()][A-Z0-9]/g, '')          // Character set selection
-    .replace(/\x1b[\x20-\x2f]*[\x40-\x7e]/g, '');  // Other escape sequences
+    .replace(/\x1b[\x20-\x2f]*[\x40-\x7e]/g, '')   // Other escape sequences
+    .replace(/^─{10,}\n?/gm, '');   // Remove decorative separator lines (mobile readability)
 }
 
 function linkifyOutput(text) {
