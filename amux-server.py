@@ -6492,6 +6492,39 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .peek-memory-editor.active { display: flex; }
   .peek-git-panel { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
   .peek-git-panel.active { display: flex; }
+  /* Commits panel */
+  .peek-commits-panel { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+  .peek-commits-panel.active { display: flex; }
+  .commits-layout { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+  .commits-sidebar { width: 280px; flex-shrink: 0; border-right: 1px solid var(--border); overflow-y: auto; background: var(--bg); }
+  .commits-list { }
+  .commits-item { padding: 10px 14px; cursor: pointer; border-bottom: 1px solid rgba(139,148,158,0.08); transition: background 0.08s; }
+  .commits-item:hover { background: rgba(139,148,158,0.06); }
+  .commits-item.active { background: rgba(88,166,255,0.1); border-left: 3px solid var(--accent); }
+  .commits-item-subject { font-size: 0.82rem; font-weight: 500; color: var(--text); line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .commits-item-meta { display: flex; gap: 8px; margin-top: 4px; font-size: 0.7rem; color: var(--dim); }
+  .commits-item-hash { font-family: monospace; font-size: 0.7rem; color: var(--accent); opacity: 0.8; }
+  .commits-detail { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+  .commits-detail-empty { flex: 1; display: flex; align-items: center; justify-content: center; }
+  .commits-back-btn { display: none; background: none; border: none; color: var(--accent); cursor: pointer; padding: 8px 14px; font-size: 0.82rem; text-align: left; border-bottom: 1px solid var(--border); }
+  .commits-detail-header { padding: 14px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .commits-detail-header h3 { margin: 0 0 6px; font-size: 0.95rem; font-weight: 600; color: var(--text); line-height: 1.4; }
+  .commits-detail-header .commits-meta-row { display: flex; gap: 12px; flex-wrap: wrap; font-size: 0.75rem; color: var(--dim); }
+  .commits-detail-header .commits-body-text { margin-top: 8px; font-size: 0.82rem; color: var(--text); white-space: pre-wrap; line-height: 1.5; }
+  .commits-detail-header .commits-stat { margin-top: 10px; font-size: 0.78rem; font-family: monospace; color: var(--dim); white-space: pre-wrap; line-height: 1.4; }
+  .commits-detail-diff { flex: 1; overflow: auto; background: #1e1e2e; padding: 0; }
+  .commits-detail-diff pre { margin: 0; padding: 12px; font-size: 0.78rem; line-height: 1.5; color: #cdd6f4; white-space: pre; }
+  .commits-detail-diff .diff-add { color: #a6e3a1; }
+  .commits-detail-diff .diff-del { color: #f38ba8; }
+  .commits-detail-diff .diff-hdr { color: #89b4fa; font-weight: 600; }
+  .commits-detail-diff .diff-hunk { color: #cba6f7; }
+  @media (max-width: 600px) {
+    .commits-sidebar { width: 100%; position: absolute; top: 0; left: 0; bottom: 0; z-index: 10; transition: transform 0.2s ease; }
+    .commits-layout { position: relative; }
+    .commits-sidebar.hidden { transform: translateX(-110%); }
+    .commits-back-btn { display: block; }
+    .commits-detail-empty { display: none; }
+  }
   .git-panel-header { display:flex;align-items:center;gap:8px;padding:8px 14px;border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap; }
   .git-panel-body { display:flex;flex:1;min-height:0;overflow:hidden;position:relative; }
   /* Left: collapsible dir tree (sidebar) */
@@ -9354,6 +9387,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <button class="peek-tab" id="peek-tab-issues" onclick="setPeekTab('issues')">Issues</button>
     <button class="peek-tab" id="peek-tab-memory" onclick="setPeekTab('memory')">Memory</button>
     <button class="peek-tab" id="peek-tab-git" onclick="setPeekTab('git')">Worktree</button>
+    <button class="peek-tab" id="peek-tab-commits" onclick="setPeekTab('commits')">Commits</button>
   </div>
   <!-- Working directory bar -->
   <div class="peek-dir-bar">
@@ -9452,6 +9486,26 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         </div>
       </div>
       <div id="peek-git-empty" style="display:none;color:var(--dim);font-size:0.85rem;padding:20px 16px;">No git repository found for this session.</div>
+    </div>
+  </div>
+  <!-- Commits panel -->
+  <div id="peek-commits-panel" class="peek-commits-panel">
+    <div class="commits-layout">
+      <div class="commits-sidebar" id="commits-sidebar">
+        <div class="commits-list" id="commits-list">
+          <div style="color:var(--dim);font-size:0.85rem;padding:20px 16px;">Loading commits…</div>
+        </div>
+      </div>
+      <div class="commits-detail" id="commits-detail">
+        <button class="commits-back-btn" id="commits-back-btn" onclick="_commitsBack()">&#8592; Commits</button>
+        <div class="commits-detail-empty" id="commits-detail-empty">
+          <div style="color:var(--dim);font-size:0.85rem;">Select a commit to view details</div>
+        </div>
+        <div id="commits-detail-content" style="display:none;flex-direction:column;flex:1;overflow:hidden;">
+          <div class="commits-detail-header" id="commits-detail-header"></div>
+          <div class="commits-detail-diff" id="commits-detail-diff"></div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -11933,6 +11987,7 @@ function setPeekTab(tab) {
   document.getElementById('peek-tab-issues').classList.toggle('active', tab === 'issues');
   document.getElementById('peek-tab-memory').classList.toggle('active', tab === 'memory');
   document.getElementById('peek-tab-git').classList.toggle('active', tab === 'git');
+  document.getElementById('peek-tab-commits').classList.toggle('active', tab === 'commits');
   document.getElementById('peek-terminal-panel').style.display = tab === 'terminal' ? '' : 'none';
   const issues = document.getElementById('peek-issues-panel');
   if (tab === 'issues') { issues.classList.add('active'); renderPeekIssues(); }
@@ -11943,6 +11998,114 @@ function setPeekTab(tab) {
   const git = document.getElementById('peek-git-panel');
   if (tab === 'git') { git.classList.add('active'); loadPeekGit(); }
   else { git.classList.remove('active'); }
+  const commits = document.getElementById('peek-commits-panel');
+  if (tab === 'commits') { commits.classList.add('active'); _commitsLoad(); }
+  else { commits.classList.remove('active'); }
+}
+
+// ── Commits panel ──
+let _commitsData = [];
+let _commitsActiveHash = null;
+
+async function _commitsLoad() {
+  if (!peekSession) return;
+  const list = document.getElementById('commits-list');
+  list.innerHTML = '<div style="color:var(--dim);font-size:0.85rem;padding:20px 16px;">Loading commits…</div>';
+  try {
+    const r = await fetch(API + '/api/sessions/' + encodeURIComponent(peekSession) + '/git/commits?count=40');
+    const d = await r.json();
+    _commitsData = d.commits || [];
+    _commitsRenderList();
+  } catch(e) {
+    list.innerHTML = '<div style="color:var(--dim);font-size:0.85rem;padding:20px 16px;">Failed to load commits.</div>';
+  }
+}
+
+function _commitsRenderList() {
+  const list = document.getElementById('commits-list');
+  if (!_commitsData.length) {
+    list.innerHTML = '<div style="color:var(--dim);font-size:0.85rem;padding:20px 16px;">No commits found.</div>';
+    return;
+  }
+  let html = '';
+  let lastDate = '';
+  for (const c of _commitsData) {
+    const d = c.date ? c.date.slice(0, 10) : '';
+    if (d !== lastDate) {
+      lastDate = d;
+      const dt = new Date(d + 'T00:00:00');
+      const label = dt.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
+      html += `<div style="padding:8px 14px 4px;font-size:0.72rem;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:0.03em;background:var(--bg);position:sticky;top:0;z-index:1;">${esc(label)}</div>`;
+    }
+    const active = c.hash === _commitsActiveHash ? ' active' : '';
+    const shortHash = c.hash.slice(0, 7);
+    const time = c.date ? c.date.slice(11, 16) : '';
+    html += `<div class="commits-item${active}" data-hash="${c.hash}" onclick="_commitsSelect('${c.hash}')">`;
+    html += `<div class="commits-item-subject">${esc(c.subject)}</div>`;
+    html += `<div class="commits-item-meta"><span class="commits-item-hash">${shortHash}</span><span>${esc(c.author)}</span><span>${time}</span></div>`;
+    html += `</div>`;
+  }
+  list.innerHTML = html;
+}
+
+async function _commitsSelect(hash) {
+  _commitsActiveHash = hash;
+  // Highlight in list
+  document.querySelectorAll('#commits-list .commits-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.hash === hash);
+  });
+  // On mobile, hide sidebar
+  if (window.innerWidth <= 600) {
+    document.getElementById('commits-sidebar').classList.add('hidden');
+  }
+  const content = document.getElementById('commits-detail-content');
+  const empty = document.getElementById('commits-detail-empty');
+  const hdr = document.getElementById('commits-detail-header');
+  const diffEl = document.getElementById('commits-detail-diff');
+  empty.style.display = 'none';
+  content.style.display = 'flex';
+  hdr.innerHTML = '<div style="color:var(--dim);font-size:0.85rem;">Loading…</div>';
+  diffEl.innerHTML = '';
+  try {
+    const r = await fetch(API + '/api/sessions/' + encodeURIComponent(peekSession) + '/git/commit-detail?sha=' + hash);
+    const d = await r.json();
+    let headerHtml = `<h3>${esc(d.subject || '')}</h3>`;
+    headerHtml += `<div class="commits-meta-row">`;
+    headerHtml += `<span style="font-family:monospace;color:var(--accent);">${(d.hash || hash).slice(0, 10)}</span>`;
+    headerHtml += `<span>${esc(d.author || '')}</span>`;
+    if (d.date) {
+      const dt = new Date(d.date.replace(' ', 'T'));
+      headerHtml += `<span>${dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} ${dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</span>`;
+    }
+    headerHtml += `</div>`;
+    if (d.body) headerHtml += `<div class="commits-body-text">${esc(d.body)}</div>`;
+    if (d.stat) headerHtml += `<div class="commits-stat">${esc(d.stat)}</div>`;
+    hdr.innerHTML = headerHtml;
+    // Render diff with syntax coloring
+    if (d.diff) {
+      const lines = d.diff.split('\n').map(line => {
+        const e = esc(line);
+        if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff --git')) return `<span class="diff-hdr">${e}</span>`;
+        if (line.startsWith('@@')) return `<span class="diff-hunk">${e}</span>`;
+        if (line.startsWith('+')) return `<span class="diff-add">${e}</span>`;
+        if (line.startsWith('-')) return `<span class="diff-del">${e}</span>`;
+        return e;
+      });
+      diffEl.innerHTML = `<pre>${lines.join('\n')}</pre>`;
+    } else {
+      diffEl.innerHTML = '<div style="padding:16px;color:var(--dim);font-size:0.85rem;">No diff available</div>';
+    }
+  } catch(e) {
+    hdr.innerHTML = '<div style="color:var(--dim);font-size:0.85rem;">Failed to load commit details.</div>';
+  }
+}
+
+function _commitsBack() {
+  // Mobile: show sidebar again
+  document.getElementById('commits-sidebar').classList.remove('hidden');
+  _commitsActiveHash = null;
+  document.getElementById('commits-detail-content').style.display = 'none';
+  document.getElementById('commits-detail-empty').style.display = '';
 }
 
 let _peekTrackedFiles = null; // tracked files for current peek session
@@ -12405,6 +12568,7 @@ function openPeek(name, opts) {
   document.getElementById('peek-terminal-panel').style.display = '';
   document.getElementById('peek-memory-panel').classList.remove('active');
   document.getElementById('peek-git-panel').classList.remove('active');
+  document.getElementById('peek-commits-panel').classList.remove('active');
   // Update dir bar
   document.getElementById('peek-dir-text').textContent = peekSessionDir || '(unknown)';
   const prefillQuery = opts && opts.query ? opts.query : '';
@@ -22325,7 +22489,7 @@ const _TRASH_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="1
 function _notesTTS() {
   if (!_notesActive) return;
   // Get plain text from the Quill editor
-  const editor = _notesQuill;
+  const editor = _quill;
   const text = editor ? editor.getText().trim() : '';
   if (!text) { showToast('Note is empty', 'error'); return; }
   openTTS(text);
@@ -28569,6 +28733,52 @@ p{{color:#888;margin:12px 0 28px;font-size:0.9rem;line-height:1.5}}
                 return self._json(stats)
             if action == "git":
                 wd = _session_work_dir(name)
+                if action_subid == "commits":
+                    count = int(qs.get("count", ["30"])[0])
+                    # Return commit log with hash, author, date, subject, body
+                    fmt = "%H%x00%an%x00%ai%x00%s%x00%b%x1E"
+                    rc = subprocess.run(
+                        ["git", "-C", wd, "log", f"-{count}", f"--format={fmt}"],
+                        capture_output=True, text=True, timeout=10, errors="replace",
+                    )
+                    commits = []
+                    if rc.returncode == 0:
+                        for entry in rc.stdout.split("\x1E"):
+                            entry = entry.strip()
+                            if not entry:
+                                continue
+                            parts = entry.split("\x00", 4)
+                            if len(parts) >= 4:
+                                commits.append({
+                                    "hash": parts[0], "author": parts[1],
+                                    "date": parts[2], "subject": parts[3],
+                                    "body": parts[4].strip() if len(parts) > 4 else "",
+                                })
+                    return self._json({"commits": commits})
+                if action_subid == "commit-detail":
+                    sha = qs.get("sha", [""])[0]
+                    if not sha:
+                        return self._json({"error": "sha required"}, 400)
+                    rd = subprocess.run(
+                        ["git", "-C", wd, "show", sha, "--stat", "--format=%H%n%an%n%ai%n%s%n%b%x00"],
+                        capture_output=True, text=True, timeout=10, errors="replace",
+                    )
+                    parts = rd.stdout.split("\x00", 1)
+                    meta = parts[0].split("\n", 4) if parts else []
+                    stat = parts[1].strip() if len(parts) > 1 else ""
+                    # Also get full diff
+                    rd2 = subprocess.run(
+                        ["git", "-C", wd, "show", sha, "--format="],
+                        capture_output=True, text=True, timeout=10, errors="replace",
+                    )
+                    return self._json({
+                        "hash": meta[0] if meta else sha,
+                        "author": meta[1] if len(meta) > 1 else "",
+                        "date": meta[2] if len(meta) > 2 else "",
+                        "subject": meta[3] if len(meta) > 3 else "",
+                        "body": meta[4].strip() if len(meta) > 4 else "",
+                        "stat": stat, "diff": rd2.stdout if rd2.returncode == 0 else "",
+                    })
                 if action_subid == "diff":
                     file_path = qs.get("file", [""])[0]
                     staged = qs.get("staged", ["0"])[0] == "1"
