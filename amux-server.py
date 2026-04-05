@@ -1962,6 +1962,15 @@ if not cs: print('No contacts yet')
 for c in cs: print(c.get('id',''),c.get('name',''),c.get('company',''))" ;;
       *) echo "amux crm: unknown subcommand: $sub" >&2; exit 1 ;;
     esac ;;
+  restart)
+    session="$1"
+    if [ -z "$session" ]; then echo "Usage: amux restart <session>" >&2; exit 1; fi
+    echo "Stopping $session..."
+    curl -sk -X POST "$AMUX_URL/api/sessions/$session/stop" >/dev/null
+    sleep 1
+    echo "Starting $session..."
+    curl -sk -X POST "$AMUX_URL/api/sessions/$session/start" >/dev/null
+    echo "Restarted $session" ;;
   session|sessions)
     curl -sk "$AMUX_URL/api/sessions" | python3 -c "
 import json,sys
@@ -1989,6 +1998,7 @@ for s in json.load(sys.stdin): print(s['name'], '(running)' if s.get('running') 
     echo "amux crm followups                      — show upcoming follow-ups"
     echo "amux crm list                           — list all contacts"
     echo "amux sessions                           — list sessions"
+    echo "amux restart <session>                  — stop and restart a session"
     echo "amux share <session> [perms]            — create a public share link (perms: output, output+files, output+files+notes)"
     echo "amux unshare <session> [token]          — revoke share link(s)" ;;
   *) echo "amux: unknown command: $cmd" >&2; exit 1 ;;
@@ -2045,6 +2055,10 @@ def _init_db():
         "ALTER TABLE issues ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE schedules ADD COLUMN run_count INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE schedules ADD COLUMN schedule_expr TEXT",
+        "ALTER TABLE schedules ADD COLUMN watch INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE schedules ADD COLUMN watch_timeout INTEGER NOT NULL DEFAULT 120",
+        "ALTER TABLE schedules ADD COLUMN done_pattern TEXT",
+        "ALTER TABLE schedules ADD COLUMN done_action TEXT NOT NULL DEFAULT 'disable'",
         "ALTER TABLE graph_nodes ADD COLUMN source_path TEXT NOT NULL DEFAULT ''",
     ]:
         try:
@@ -2745,14 +2759,39 @@ def _cron_next_run(parts: list, base) -> str | None:
     return None
 
 
+def _parse_time_str(s: str) -> tuple[int, int] | None:
+    """Parse flexible time strings: '18:00', '6pm', '6:30pm', '9am', '09:00'."""
+    import re as _re
+    # HH:MM am/pm
+    m = _re.match(r'^(\d{1,2}):(\d{2})\s*(am|pm)?$', s.strip().lower())
+    if m:
+        h, mi = int(m.group(1)), int(m.group(2))
+        if m.group(3) == 'pm' and h < 12: h += 12
+        elif m.group(3) == 'am' and h == 12: h = 0
+        return (h, mi)
+    # Ham/pm (no minutes)
+    m = _re.match(r'^(\d{1,2})\s*(am|pm)$', s.strip().lower())
+    if m:
+        h = int(m.group(1))
+        if m.group(2) == 'pm' and h < 12: h += 12
+        elif m.group(2) == 'am' and h == 12: h = 0
+        return (h, 0)
+    return None
+
+
 def _parse_next_run(expr: str, from_ts: float | None = None) -> str | None:
     """Parse a free-text schedule expression and return next ISO run time.
 
     Supported formats:
-      every Xm / Xh / Xd          — interval from now
-      daily at HH:MM               — delegates to _next_run_dt
-      weekly on <dayname> at HH:MM — delegates to _next_run_dt
-      MIN HOUR DOM MON DOW         — 5-field cron
+      every Xm / Xh / Xd               — interval from now
+      in Xm / Xh                        — one-shot relative
+      daily at HH:MM / 6pm              — daily recurring
+      every morning / every evening      — aliases for 9am / 18:00
+      every weekday at HH:MM            — Mon-Fri cron
+      every <dayname> at HH:MM          — weekly shorthand
+      weekly on <dayname> at HH:MM      — weekly recurring
+      monthly on <N> at HH:MM           — monthly recurring
+      MIN HOUR DOM MON DOW              — 5-field cron
     """
     import re as _re
     from datetime import datetime, timedelta
@@ -2762,6 +2801,16 @@ def _parse_next_run(expr: str, from_ts: float | None = None) -> str | None:
     base = datetime.fromtimestamp(from_ts) if from_ts else datetime.now()
     s = expr.strip().lower()
 
+    _DAY_MAP = {'monday':0,'tuesday':1,'wednesday':2,'thursday':3,'friday':4,'saturday':5,'sunday':6,
+                'mon':0,'tue':1,'wed':2,'thu':3,'fri':4,'sat':5,'sun':6}
+
+    # "in Xm/h" — one-shot relative
+    m = _re.match(r'^in\s+(\d+)\s*(m|min|minutes?|h|hr|hours?)$', s)
+    if m:
+        n, unit = int(m.group(1)), m.group(2)[0]
+        delta = {'m': timedelta(minutes=n), 'h': timedelta(hours=n)}[unit]
+        return (base + delta).strftime("%Y-%m-%dT%H:%M")
+
     # every Xm/h/d
     m = _re.match(r'^every\s+(\d+)\s*(m|min|minutes?|h|hr|hours?|d|days?)$', s)
     if m:
@@ -2769,21 +2818,56 @@ def _parse_next_run(expr: str, from_ts: float | None = None) -> str | None:
         delta = {'m': timedelta(minutes=n), 'h': timedelta(hours=n), 'd': timedelta(days=n)}[unit]
         return (base + delta).strftime("%Y-%m-%dT%H:%M")
 
-    # daily at HH:MM
-    m = _re.match(r'^daily\s+at\s+(\d{1,2}):(\d{2})$', s)
+    # "every morning" / "every evening" / "every night"
+    m = _re.match(r'^every\s+(morning|evening|night)$', s)
     if m:
+        h = 9 if m.group(1) == 'morning' else 18
         return _next_run_dt({"sched_type": "recurring", "recurrence": "daily",
-                              "run_at": f"{int(m.group(1)):02d}:{m.group(2)}"})
+                              "run_at": f"{h:02d}:00"})
 
-    # weekly on <day> at HH:MM
-    _DAY_MAP = {'monday':0,'tuesday':1,'wednesday':2,'thursday':3,'friday':4,'saturday':5,'sunday':6,
-                'mon':0,'tue':1,'wed':2,'thu':3,'fri':4,'sat':5,'sun':6}
-    m = _re.match(r'^weekly\s+on\s+(\w+)\s+at\s+(\d{1,2}):(\d{2})$', s)
+    # "every weekday at TIME" — Mon-Fri cron
+    m = _re.match(r'^every\s+weekday\s+at\s+(.+)$', s)
+    if m:
+        t = _parse_time_str(m.group(1))
+        if t:
+            return _cron_next_run([str(t[1]), str(t[0]), '*', '*', '1-5'], base)
+
+    # "every <dayname> at TIME" — weekly shorthand
+    m = _re.match(r'^every\s+(\w+)\s+at\s+(.+)$', s)
     if m:
         day_num = _DAY_MAP.get(m.group(1))
         if day_num is not None:
-            return _next_run_dt({"sched_type": "recurring", "recurrence": "weekly",
-                                  "run_at": f"{day_num}:{int(m.group(2)):02d}:{m.group(3)}"})
+            t = _parse_time_str(m.group(2))
+            if t:
+                return _next_run_dt({"sched_type": "recurring", "recurrence": "weekly",
+                                      "run_at": f"{day_num}:{t[0]:02d}:{t[1]:02d}"})
+
+    # daily at TIME (flexible: "daily at 18:00", "daily at 6pm")
+    m = _re.match(r'^daily\s+at\s+(.+)$', s)
+    if m:
+        t = _parse_time_str(m.group(1))
+        if t:
+            return _next_run_dt({"sched_type": "recurring", "recurrence": "daily",
+                                  "run_at": f"{t[0]:02d}:{t[1]:02d}"})
+
+    # weekly on <day> at TIME
+    m = _re.match(r'^weekly\s+on\s+(\w+)\s+at\s+(.+)$', s)
+    if m:
+        day_num = _DAY_MAP.get(m.group(1))
+        if day_num is not None:
+            t = _parse_time_str(m.group(2))
+            if t:
+                return _next_run_dt({"sched_type": "recurring", "recurrence": "weekly",
+                                      "run_at": f"{day_num}:{t[0]:02d}:{t[1]:02d}"})
+
+    # monthly on <N> at TIME — "monthly on 15 at 9am"
+    m = _re.match(r'^monthly\s+on\s+(\d{1,2})\s+at\s+(.+)$', s)
+    if m:
+        mday = int(m.group(1))
+        t = _parse_time_str(m.group(2))
+        if t and 1 <= mday <= 28:
+            return _next_run_dt({"sched_type": "recurring", "recurrence": "monthly",
+                                  "run_at": f"{mday}:{t[0]:02d}:{t[1]:02d}"})
 
     # 5-field cron
     parts = expr.strip().split()
@@ -2856,11 +2940,14 @@ def _next_run_dt(sched):
 
 
 def _run_schedule(sched):
-    """Execute a schedule entry — send message to tmux session and log the run."""
+    """Execute a schedule entry — send message to tmux session and log the run.
+    If watch=1, spawns a background thread to monitor the response."""
     session = sched["session"]
     command = sched.get("command") or ""
     slog(f"[sched] running '{sched['title']}' → session '{session}'")
     status, note = "ok", None
+    # Capture output before sending so we can detect new output later
+    pre_output = tmux_capture(session, 200) if sched.get("watch") else ""
     try:
         ok, err = send_text(session, command)
         if not ok:
@@ -2883,6 +2970,100 @@ def _run_schedule(sched):
     except Exception as log_err:
         slog(f"[sched] failed to log run: {log_err}")
     _push_alert("scheduler", session, f"Ran schedule: {sched['title']}")
+    # If watch mode is enabled, monitor response in background
+    if sched.get("watch") and status == "ok":
+        threading.Thread(
+            target=_watch_schedule_response,
+            args=(sched, pre_output),
+            daemon=True,
+            name=f"sched-watch-{sched['id']}"
+        ).start()
+
+
+def _watch_schedule_response(sched, pre_output: str):
+    """Monitor session output after a scheduled command. If done_pattern matches
+    new output, take done_action (disable, notify, or send a follow-up command)."""
+    import re as _re
+    session = sched["session"]
+    timeout = sched.get("watch_timeout") or 120
+    done_pattern = sched.get("done_pattern") or ""
+    done_action = sched.get("done_action") or "disable"
+    sched_id = sched["id"]
+
+    if not done_pattern:
+        return
+
+    slog(f"[sched-watch] watching '{sched['title']}' for pattern: {done_pattern}")
+    start = time.time()
+    poll_interval = 5  # check every 5s
+    matched = False
+
+    while time.time() - start < timeout:
+        time.sleep(poll_interval)
+        current_output = tmux_capture(session, 200)
+        # Extract only new output (after what was there before)
+        new_output = current_output
+        if pre_output:
+            # Find where old output ends in new output
+            overlap = pre_output[-200:] if len(pre_output) > 200 else pre_output
+            idx = current_output.find(overlap[-100:]) if len(overlap) >= 100 else -1
+            if idx >= 0:
+                new_output = current_output[idx + len(overlap[-100:]):]
+
+        try:
+            if _re.search(done_pattern, new_output, _re.IGNORECASE):
+                matched = True
+                slog(f"[sched-watch] pattern matched for '{sched['title']}': {done_pattern}")
+                break
+        except _re.error:
+            # Fallback to simple substring match if regex is invalid
+            if done_pattern.lower() in new_output.lower():
+                matched = True
+                slog(f"[sched-watch] substring matched for '{sched['title']}': {done_pattern}")
+                break
+
+    if not matched:
+        slog(f"[sched-watch] timeout ({timeout}s) for '{sched['title']}' — no match")
+        return
+
+    # Pattern matched — take action
+    try:
+        db = get_db()
+        now_ts = int(time.time())
+        if done_action == "disable":
+            db.execute("UPDATE schedules SET enabled=0, updated=? WHERE id=?", (now_ts, sched_id))
+            db.commit()
+            _push_alert("scheduler", session,
+                         f"Schedule '{sched['title']}' auto-disabled — done pattern matched")
+            slog(f"[sched-watch] disabled schedule '{sched['title']}'")
+            # Log the auto-disable as a run note
+            db.execute(
+                "INSERT INTO schedule_runs (schedule_id, ran_at, status, note) VALUES (?,?,?,?)",
+                (sched_id, now_ts, "done", f"Auto-disabled: matched '{done_pattern}'")
+            )
+            db.commit()
+        elif done_action == "notify":
+            _push_alert("scheduler", session,
+                         f"Schedule '{sched['title']}' — done pattern matched: {done_pattern}")
+            db.execute(
+                "INSERT INTO schedule_runs (schedule_id, ran_at, status, note) VALUES (?,?,?,?)",
+                (sched_id, now_ts, "done", f"Pattern matched (notify only): '{done_pattern}'")
+            )
+            db.commit()
+        elif done_action.startswith("command:"):
+            follow_up = done_action[8:]
+            send_text(session, follow_up)
+            db.execute("UPDATE schedules SET enabled=0, updated=? WHERE id=?", (now_ts, sched_id))
+            db.execute(
+                "INSERT INTO schedule_runs (schedule_id, ran_at, status, note) VALUES (?,?,?,?)",
+                (sched_id, now_ts, "done", f"Matched '{done_pattern}' → sent: {follow_up}")
+            )
+            db.commit()
+            _push_alert("scheduler", session,
+                         f"Schedule '{sched['title']}' — done, sent follow-up: {follow_up}")
+            slog(f"[sched-watch] sent follow-up for '{sched['title']}': {follow_up}")
+    except Exception as e:
+        slog(f"[sched-watch] error taking action for '{sched['title']}': {e}")
 
 
 def _scheduler_loop():
@@ -2891,7 +3072,7 @@ def _scheduler_loop():
     2. DB schedules table: user-configured tmux commands (cron-style, once, etc.)
     """
     from datetime import datetime
-    _DB_CHECK_INTERVAL = 30  # only hit SQLite every 30s for DB schedules
+    _DB_CHECK_INTERVAL = 10  # check SQLite every 10s for DB schedules
     _last_db_check = 0.0
     while True:
         time.sleep(1)
@@ -3832,11 +4013,21 @@ def _auto_create_branch(name: str, work_dir: str, env_file: "Path") -> bool:
         return False
 
 
+_git_info_cache: dict[str, tuple[float, dict]] = {}  # work_dir -> (timestamp, result)
+_GIT_INFO_TTL = 15  # seconds — git status doesn't change that fast
+_GIT_INFO_DETAIL_TTL = 10  # seconds — detail view can be slightly fresher
+
+
 def _git_info(work_dir: str, detail: bool = False) -> dict:
     """Return {branch, repo} for a directory. Returns empty strings if not a git repo.
     With detail=True, also returns ahead commits, status lines, remote URL."""
     if not work_dir:
         return {"branch": "", "repo": ""}
+    cache_key = f"{work_dir}::{detail}"
+    ttl = _GIT_INFO_DETAIL_TTL if detail else _GIT_INFO_TTL
+    cached = _git_info_cache.get(cache_key)
+    if cached and time.time() - cached[0] < ttl:
+        return cached[1]
     try:
         rb = subprocess.run(
             ["git", "-C", work_dir, "branch", "--show-current"],
@@ -3852,6 +4043,7 @@ def _git_info(work_dir: str, detail: bool = False) -> dict:
             repo = rr.stdout.strip() if rr.returncode == 0 else ""
         result = {"branch": branch, "repo": repo}
         if not detail or not branch:
+            _git_info_cache[cache_key] = (time.time(), result)
             return result
         # Commits ahead of default branch (main/master)
         for base in ("main", "master", "dev", "develop"):
@@ -3901,6 +4093,7 @@ def _git_info(work_dir: str, detail: bool = False) -> dict:
             capture_output=True, text=True, timeout=5,
         )
         result["unpushed"] = len([l for l in rp.stdout.strip().splitlines() if l]) if rp.returncode == 0 else 0
+        _git_info_cache[cache_key] = (time.time(), result)
         return result
     except Exception:
         return {"branch": "", "repo": ""}
@@ -5783,15 +5976,38 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .csv-search { flex:0 0 auto;padding:3px 8px;background:var(--input,var(--card));border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.78rem;width:160px;outline:none; }
   .csv-search:focus { border-color:var(--accent); }
   .csv-truncated { font-size:0.73rem;color:var(--yellow,#fbbf24);margin-left:4px; }
-  .csv-wrap { overflow:auto;flex:1;min-height:0; }
-  .csv-table { border-collapse:collapse;font-size:0.78rem;width:max-content;min-width:100%; }
-  .csv-table th,.csv-table td { border:1px solid var(--border);padding:4px 10px;text-align:left;white-space:nowrap;max-width:280px;overflow:hidden;text-overflow:ellipsis; }
-  .csv-table th { background:var(--card);font-weight:600;position:sticky;top:0;z-index:1;cursor:pointer;user-select:none; }
+  .csv-wrap { overflow:auto;flex:1;min-height:0;-webkit-overflow-scrolling:touch; }
+  .csv-table { border-collapse:collapse;font-size:0.78rem;table-layout:fixed; }
+  .csv-table th,.csv-table td { border:1px solid var(--border);padding:6px 10px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:relative; }
+  .csv-table th { background:var(--card);font-weight:600;position:sticky;top:0;z-index:2;user-select:none; }
+  .csv-table th .csv-th-text { cursor:pointer;display:block;overflow:hidden;text-overflow:ellipsis; }
   .csv-table th:hover { background:var(--hover,rgba(255,255,255,0.06)); }
-  .csv-table th.sort-asc::after { content:' ▲';font-size:0.65rem;opacity:0.7; }
-  .csv-table th.sort-desc::after { content:' ▼';font-size:0.65rem;opacity:0.7; }
+  .csv-table th.sort-asc .csv-th-text::after { content:' ▲';font-size:0.65rem;opacity:0.7; }
+  .csv-table th.sort-desc .csv-th-text::after { content:' ▼';font-size:0.65rem;opacity:0.7; }
   .csv-table tr:nth-child(even) td { background:rgba(255,255,255,0.02); }
+  .csv-table td.csv-cell-active { outline:2px solid var(--accent);outline-offset:-2px;z-index:1; }
   .csv-row-hidden { display:none; }
+  /* Column resize handle */
+  .csv-resize { position:absolute;top:0;right:-3px;width:6px;height:100%;cursor:col-resize;z-index:3;user-select:none;-webkit-user-select:none; }
+  .csv-resize:hover,.csv-resize.active { background:var(--accent);opacity:0.5; }
+  /* Row number column */
+  .csv-table th.csv-rownum,.csv-table td.csv-rownum { width:42px;min-width:42px;max-width:42px;text-align:right;color:var(--dim);font-size:0.7rem;padding:6px 6px;background:var(--bg);position:sticky;left:0;z-index:1;border-right:2px solid var(--border); }
+  .csv-table th.csv-rownum { z-index:3;background:var(--card); }
+  /* Frozen first column */
+  .csv-table.csv-frozen th:nth-child(2),.csv-table.csv-frozen td:nth-child(2) { position:sticky;left:42px;z-index:1;background:var(--bg);border-right:2px solid var(--border); }
+  .csv-table.csv-frozen th:nth-child(2) { z-index:3;background:var(--card); }
+  .csv-table tr:nth-child(even) td.csv-rownum { background:var(--bg); }
+  .csv-table.csv-frozen tr:nth-child(even) td:nth-child(2) { background:var(--bg); }
+  /* Cell expand popover */
+  .csv-cell-pop { position:fixed;z-index:1000;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-size:0.82rem;max-width:90vw;max-height:50vh;overflow:auto;white-space:pre-wrap;word-break:break-word;box-shadow:0 4px 20px rgba(0,0,0,0.3);line-height:1.5; }
+  /* Mobile: bigger touch targets */
+  @media (max-width:600px) {
+    .csv-table th,.csv-table td { padding:10px 10px;font-size:0.82rem; }
+    .csv-toolbar { padding:10px 12px;gap:6px; }
+    .csv-search { width:100%;order:10; }
+    .csv-resize { width:10px;right:-5px; }
+    .csv-table th.csv-rownum,.csv-table td.csv-rownum { width:36px;min-width:36px;max-width:36px;padding:10px 4px; }
+  }
   /* Unified markdown content styling — used everywhere renderMarkdown() output appears */
   .md-content { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 0.88rem; line-height: 1.6; }
   .md-content > *:first-child { margin-top: 0 !important; }
@@ -5989,14 +6205,17 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   #fc-container .fc .fc-daygrid-day-frame { min-height: 80px; }
   #fc-container .fc-subscribe-button { font-size: 0.78rem !important; padding: 4px 10px !important; }
   @media (max-width: 600px) {
-    #fc-container .fc .fc-toolbar { flex-direction: column; align-items: stretch; padding: 6px 2px; gap: 4px; }
+    #fc-container .fc .fc-toolbar { flex-direction: column; align-items: stretch; padding: 6px 4px; gap: 4px; }
     #fc-container .fc .fc-toolbar-chunk { display: flex; justify-content: center; }
-    #fc-container .fc .fc-toolbar-title { font-size: 0.92rem; }
-    #fc-container .fc .fc-button { font-size: 0.75rem; padding: 4px 8px; }
-    #fc-container .fc .fc-daygrid-day-frame { min-height: 50px; }
-    #fc-container .fc .fc-daygrid-day-number { font-size: 0.72rem; padding: 2px 4px; }
-    #fc-container .fc .fc-event { font-size: 0.68rem; padding: 0 2px; }
-    #fc-container .fc .fc-col-header-cell { font-size: 0.65rem; padding: 6px 0; }
+    #fc-container .fc .fc-toolbar-title { font-size: 0.95rem; }
+    #fc-container .fc .fc-button { font-size: 0.78rem; padding: 6px 10px; min-height: 34px; }
+    #fc-container .fc .fc-daygrid-day-frame { min-height: 48px; }
+    #fc-container .fc .fc-daygrid-day-number { font-size: 0.75rem; padding: 3px 5px; }
+    #fc-container .fc .fc-event { font-size: 0.72rem; padding: 2px 4px; min-height: 22px; line-height: 1.3; }
+    #fc-container .fc .fc-col-header-cell { font-size: 0.68rem; padding: 6px 0; }
+    #fc-container .fc .fc-timegrid-slot { height: 3em; }
+    #fc-container .fc .fc-scrollgrid { border: none; }
+    #fc-container .fc .fc-subscribe-button { display: none; }
   }
   /* Board collapse */
   .board-col-collapse { background: none; border: none; cursor: pointer; color: var(--dim);
@@ -8503,8 +8722,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <div class="board-columns" id="board-columns"></div>
 </div>
 <!-- Calendar view -->
-<div id="calendar-view" style="display:none;">
-  <div id="fc-container" style="padding:4px 8px;"></div>
+<div id="calendar-view" style="display:none;flex-direction:column;width:100%;">
+  <div id="fc-container" style="width:100%;padding:0;"></div>
 </div>
 <!-- Scheduler view -->
 <div id="scheduler-view" style="display:none;">
@@ -8562,6 +8781,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <button class="fe-tb-btn" onclick="loadFiles(_filesPath)" title="Refresh">
         <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M11 6.5A4.5 4.5 0 1 1 8 2.3M11 2v4H7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
       </button>
+      <button class="fe-tb-btn" onclick="openInFinder()" title="Open in Finder">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M2 2h4l1.5 1.5H11a1 1 0 011 1V10a1 1 0 01-1 1H2a1 1 0 01-1-1V3a1 1 0 011-1z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" fill="none"/><path d="M4 8.5h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+      </button>
       <button class="fe-tb-btn" id="files-set-session-btn" onclick="setFilesSessionDir()" title="Set as session directory" style="display:none;background:var(--accent);color:#000;border-color:var(--accent);font-weight:600;font-size:0.72rem;white-space:nowrap;">
         <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M5.5 1 10 5.5 5.5 10 1 5.5Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
         <span id="files-set-session-label">Set dir</span>
@@ -8603,6 +8825,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <button class="fe-tb-oitem" onclick="loadFiles(_filesPath);_filesOverflowClose()">
           <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M11 6.5A4.5 4.5 0 1 1 8 2.3M11 2v4H7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
           Refresh
+        </button>
+        <div class="fe-tb-odivider"></div>
+        <button class="fe-tb-oitem" onclick="openInFinder();_filesOverflowClose()">
+          <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M2 2h4l1.5 1.5H11a1 1 0 011 1V10a1 1 0 01-1 1H2a1 1 0 01-1-1V3a1 1 0 011-1z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" fill="none"/><path d="M4 8.5h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+          Open in Finder
         </button>
         <button class="fe-tb-oitem fe-tb-oitem-session" id="files-session-oitem" onclick="setFilesSessionDir();_filesOverflowClose()" style="display:none;">
           <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M6.5 1 12 6.5 6.5 12 1 6.5Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
@@ -9140,11 +9367,15 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <label class="field-label">Schedule expression <span class="field-optional">(optional — overrides dropdowns below)</span></label>
         <input id="sched-expr" type="text" placeholder='e.g. "every 30m", "daily at 09:00", "0 9 * * 1-5"' autocomplete="off">
         <div style="font-size:0.65rem;color:var(--dim);margin-top:3px;display:flex;gap:6px;flex-wrap:wrap;">
-          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every 1h'" style="color:var(--accent);">every 1h</a>
           <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every 30m'" style="color:var(--accent);">every 30m</a>
-          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='daily at 09:00'" style="color:var(--accent);">daily at 09:00</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every 1h'" style="color:var(--accent);">every 1h</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every morning'" style="color:var(--accent);">every morning</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every evening'" style="color:var(--accent);">every evening</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='daily at 6pm'" style="color:var(--accent);">daily at 6pm</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every weekday at 9am'" style="color:var(--accent);">every weekday at 9am</a>
           <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='weekly on monday at 08:00'" style="color:var(--accent);">weekly on monday</a>
-          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='0 9 * * 1-5'" style="color:var(--accent);">0 9 * * 1-5 (cron)</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='monthly on 1 at 9am'" style="color:var(--accent);">monthly on 1st</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='0 9 * * 1-5'" style="color:var(--accent);">cron: weekdays 9am</a>
         </div>
       </div>
       <div class="field-group">
@@ -9171,6 +9402,30 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <div class="field-group" id="sched-monthday-field" style="display:none;">
         <label class="field-label">Day of month</label>
         <input id="sched-monthday" type="number" min="1" max="28" value="1" class="board-detail-session-select" style="width:100%;">
+      </div>
+    </div>
+    <div class="field-group" style="margin-top:8px;">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.8rem;font-weight:500;">
+        <input type="checkbox" id="sched-watch" style="width:auto;accent-color:var(--accent);" onchange="updateSchedWatchUI()">
+        Watch response
+      </label>
+      <div style="font-size:0.65rem;color:var(--dim);margin-top:2px;">After sending, monitor session output and take action when a pattern matches.</div>
+    </div>
+    <div id="sched-watch-fields" style="display:none;">
+      <div class="field-group">
+        <label class="field-label">Done pattern <span class="field-optional">(text or regex to match in response)</span></label>
+        <input id="sched-done-pattern" type="text" placeholder='e.g. "no more tasks", "all.*complete", "nothing to do"' autocomplete="off">
+      </div>
+      <div class="field-group">
+        <label class="field-label">When matched</label>
+        <select id="sched-done-action" class="board-detail-session-select" style="width:100%;">
+          <option value="disable">Stop schedule (disable)</option>
+          <option value="notify">Notify only (keep running)</option>
+        </select>
+      </div>
+      <div class="field-group">
+        <label class="field-label">Watch timeout <span class="field-optional">(seconds to wait for response)</span></label>
+        <input id="sched-watch-timeout" type="number" min="10" max="600" value="120" style="width:100px;">
       </div>
     </div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
@@ -12007,7 +12262,7 @@ async function _commitsLoad() {
   const list = document.getElementById('commits-list');
   list.innerHTML = '<div style="color:var(--dim);font-size:0.85rem;padding:20px 16px;">Loading commits…</div>';
   try {
-    const r = await fetch(API + '/api/sessions/' + encodeURIComponent(peekSession) + '/git/commits?count=40');
+    const r = await fetch(API + '/api/sessions/' + encodeURIComponent(peekSession) + '/git/commits?count=15');
     const d = await r.json();
     _commitsData = d.commits || [];
     _commitsRenderList();
@@ -12816,11 +13071,10 @@ async function refreshPeek() {
     const hasSearch = peekSearchQuery.trim().length > 0;
     const savedScrollTop = body.scrollTop;
     applyPeekSearch(hasSearch);  // keepIndex=true when search is active
-    if (hasSearch) {
-      // Preserve scroll position when user is searching — don't jump
-      body.scrollTop = savedScrollTop;
-    } else if (atBottom) {
+    if (atBottom && !hasSearch) {
       body.scrollTop = body.scrollHeight;
+    } else {
+      body.scrollTop = savedScrollTop;
     }
     statusEl.textContent = (data.saved ? 'Saved log' : 'Updated') + ' ' + new Date().toLocaleTimeString();
     // Cache peek output for offline browsing
@@ -14236,62 +14490,77 @@ function clearPeekSearch() {
 
 // ── File preview ──
 function _csvEsc(s) { return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-let _csvRows = [], _csvSort = { col: -1, asc: true };
+let _csvRows = [], _csvHeader = [], _csvSort = { col: -1, asc: true }, _csvColWidths = [], _csvFrozen = false;
 
 function renderCsvTable(csv) {
   if (!csv.trim()) return '<em style="color:var(--dim)">Empty file</em>';
-  // Use Papa Parse for correct RFC 4180 parsing (handles multiline fields,
-  // escaped quotes, BOM, various delimiters, etc.)
-  const parsed = Papa.parse(csv, {
-    header: false,
-    skipEmptyLines: true,
-    dynamicTyping: false,  // keep everything as strings for display
-  });
+  const parsed = Papa.parse(csv, { header: false, skipEmptyLines: true, dynamicTyping: false });
   if (!parsed.data.length) return '<em style="color:var(--dim)">Empty file</em>';
-  const header = parsed.data[0];
+  _csvHeader = parsed.data[0];
   const allRows = parsed.data.slice(1);
   const MAX_ROWS = 2000;
   const truncated = allRows.length > MAX_ROWS;
   _csvRows = truncated ? allRows.slice(0, MAX_ROWS) : allRows;
   _csvSort = { col: -1, asc: true };
+  _csvFrozen = false;
+  // Auto-size columns: measure header + sample rows
+  _csvColWidths = _csvHeader.map((h, i) => {
+    let maxLen = (h || '').length;
+    for (let r = 0; r < Math.min(50, _csvRows.length); r++) {
+      const cell = (_csvRows[r][i] || '');
+      if (cell.length > maxLen) maxLen = cell.length;
+    }
+    return Math.max(60, Math.min(280, maxLen * 8 + 20));
+  });
   const delimLabel = parsed.meta.delimiter === '\t' ? ' · TSV' : '';
+  const metaText = `${_csvRows.length.toLocaleString()}${truncated ? '+' : ''} rows × ${_csvHeader.length} cols${delimLabel}`;
+  const truncNote = truncated ? `<span class="csv-truncated">⚠ first ${MAX_ROWS.toLocaleString()} of ${allRows.length.toLocaleString()}</span>` : '';
 
-  const metaText = `${_csvRows.length.toLocaleString()}${truncated ? '+' : ''} rows × ${header.length} cols${delimLabel}`;
-  const truncNote = truncated ? `<span class="csv-truncated">⚠ showing first ${MAX_ROWS.toLocaleString()} of ${allRows.length.toLocaleString()} rows</span>` : '';
-  const thead = '<tr>' + header.map((h,i) =>
-    `<th onclick="_csvSortBy(${i})" title="${_csvEsc(h)}">${_csvEsc(h) || '<span style="opacity:.4">#'+i+'</span>'}</th>`
+  const colgroup = '<col class="csv-rownum-col" style="width:42px">' +
+    _csvColWidths.map((w,i) => `<col data-ci="${i}" style="width:${w}px">`).join('');
+  const thead = '<tr><th class="csv-rownum">#</th>' + _csvHeader.map((h,i) =>
+    `<th data-ci="${i}"><span class="csv-th-text" onclick="_csvSortBy(${i})" title="${_csvEsc(h)}">${_csvEsc(h) || '<span style="opacity:.4">col '+i+'</span>'}</span><div class="csv-resize" data-ci="${i}"></div></th>`
   ).join('') + '</tr>';
-  const tbody = _csvRows.map((r,ri) =>
-    `<tr data-ri="${ri}">` + header.map((_,ci) => `<td title="${_csvEsc(r[ci])}">${_csvEsc(r[ci])}</td>`).join('') + '</tr>'
-  ).join('');
+  const tbody = _csvRenderRows(_csvRows);
+
+  // Schedule resize handle init after DOM render
+  setTimeout(_csvInitResize, 50);
+  setTimeout(_csvInitCellTap, 50);
 
   return `<div class="csv-toolbar">
     <span class="csv-meta">${metaText}${truncNote}</span>
+    <label style="font-size:0.72rem;display:flex;align-items:center;gap:4px;cursor:pointer;color:var(--dim);">
+      <input type="checkbox" style="width:auto;accent-color:var(--accent);" onchange="_csvToggleFreeze(this.checked)"> Freeze col
+    </label>
     <input class="csv-search" placeholder="Filter rows…" oninput="_csvFilter(this.value)" type="search">
   </div>
-  <div class="csv-wrap"><table class="csv-table" id="csv-tbl"><thead>${thead}</thead><tbody id="csv-body">${tbody}</tbody></table></div>`;
+  <div class="csv-wrap"><table class="csv-table" id="csv-tbl"><colgroup>${colgroup}</colgroup><thead>${thead}</thead><tbody id="csv-body">${tbody}</tbody></table></div>`;
+}
+
+function _csvRenderRows(rows) {
+  return rows.map((r, ri) =>
+    `<tr data-ri="${ri}"><td class="csv-rownum">${ri + 1}</td>` +
+    _csvHeader.map((_, ci) => `<td data-ci="${ci}" title="${_csvEsc(r[ci])}">${_csvEsc(r[ci])}</td>`).join('') + '</tr>'
+  ).join('');
 }
 
 function _csvSortBy(col) {
   const asc = _csvSort.col === col ? !_csvSort.asc : true;
   _csvSort = { col, asc };
-  const sorted = [..._csvRows].sort((a,b) => {
-    const av = a[col]??'', bv = b[col]??'';
+  const sorted = [..._csvRows].sort((a, b) => {
+    const av = a[col] ?? '', bv = b[col] ?? '';
     const an = parseFloat(av), bn = parseFloat(bv);
     const cmp = (!isNaN(an) && !isNaN(bn)) ? an - bn : av.localeCompare(bv);
     return asc ? cmp : -cmp;
   });
   const tbody = document.getElementById('csv-body');
   if (!tbody) return;
-  tbody.innerHTML = sorted.map((r,ri) =>
-    `<tr data-ri="${ri}">` + r.map(c => `<td title="${_csvEsc(c??'')}">${_csvEsc(c??'')}</td>`).join('') + '</tr>'
-  ).join('');
-  // Update sort indicators
-  document.querySelectorAll('#csv-tbl th').forEach((th,i) => {
-    th.classList.toggle('sort-asc', i === col && asc);
-    th.classList.toggle('sort-desc', i === col && !asc);
+  tbody.innerHTML = _csvRenderRows(sorted);
+  document.querySelectorAll('#csv-tbl thead th[data-ci]').forEach(th => {
+    const ci = parseInt(th.dataset.ci);
+    th.classList.toggle('sort-asc', ci === col && asc);
+    th.classList.toggle('sort-desc', ci === col && !asc);
   });
-  // Re-apply filter
   const q = document.querySelector('.csv-search');
   if (q && q.value) _csvFilter(q.value);
 }
@@ -14308,8 +14577,79 @@ function _csvFilter(q) {
   if (meta) {
     if (!meta.dataset.base) meta.dataset.base = meta.firstChild.textContent || '';
     const base = meta.dataset.base;
-    if (meta.firstChild) meta.firstChild.textContent = lower ? `${vis} match${vis!==1?'es':''} · ${base}` : base;
+    if (meta.firstChild) meta.firstChild.textContent = lower ? `${vis} match${vis !== 1 ? 'es' : ''} · ${base}` : base;
   }
+}
+
+function _csvToggleFreeze(on) {
+  const tbl = document.getElementById('csv-tbl');
+  if (tbl) tbl.classList.toggle('csv-frozen', on);
+  _csvFrozen = on;
+}
+
+// ── Column resize (drag handles) ──
+function _csvInitResize() {
+  const tbl = document.getElementById('csv-tbl');
+  if (!tbl) return;
+  tbl.querySelectorAll('.csv-resize').forEach(handle => {
+    const start = (startX, ci) => {
+      const col = tbl.querySelector(`colgroup col[data-ci="${ci}"]`);
+      if (!col) return;
+      const startW = parseInt(col.style.width) || 100;
+      handle.classList.add('active');
+      const move = (x) => {
+        const newW = Math.max(40, startW + (x - startX));
+        col.style.width = newW + 'px';
+        _csvColWidths[ci] = newW;
+      };
+      const up = () => {
+        handle.classList.remove('active');
+        document.removeEventListener('mousemove', onMM);
+        document.removeEventListener('mouseup', up);
+        document.removeEventListener('touchmove', onTM);
+        document.removeEventListener('touchend', up);
+      };
+      const onMM = (e) => { e.preventDefault(); move(e.clientX); };
+      const onTM = (e) => { if (e.touches[0]) move(e.touches[0].clientX); };
+      document.addEventListener('mousemove', onMM);
+      document.addEventListener('mouseup', up);
+      document.addEventListener('touchmove', onTM, { passive: true });
+      document.addEventListener('touchend', up);
+    };
+    handle.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); start(e.clientX, parseInt(handle.dataset.ci)); });
+    handle.addEventListener('touchstart', (e) => { e.stopPropagation(); if (e.touches[0]) start(e.touches[0].clientX, parseInt(handle.dataset.ci)); }, { passive: true });
+  });
+}
+
+// ── Cell tap to expand (mobile-friendly) ──
+let _csvPopEl = null;
+function _csvInitCellTap() {
+  const tbl = document.getElementById('csv-tbl');
+  if (!tbl) return;
+  const dismiss = () => { if (_csvPopEl) { _csvPopEl.remove(); _csvPopEl = null; } };
+  tbl.addEventListener('click', (e) => {
+    const td = e.target.closest('td[data-ci]');
+    if (!td) { dismiss(); return; }
+    // Remove previous active
+    tbl.querySelectorAll('.csv-cell-active').forEach(c => c.classList.remove('csv-cell-active'));
+    dismiss();
+    td.classList.add('csv-cell-active');
+    const text = td.getAttribute('title') || td.textContent;
+    // Only show popover if content is truncated or on mobile
+    if (td.scrollWidth <= td.clientWidth + 2 && window.innerWidth > 600) return;
+    const pop = document.createElement('div');
+    pop.className = 'csv-cell-pop';
+    pop.textContent = text;
+    const rect = td.getBoundingClientRect();
+    pop.style.left = Math.min(rect.left, window.innerWidth - 320) + 'px';
+    pop.style.top = (rect.bottom + 4) + 'px';
+    document.body.appendChild(pop);
+    _csvPopEl = pop;
+    // Ensure it doesn't overflow screen
+    const popRect = pop.getBoundingClientRect();
+    if (popRect.bottom > window.innerHeight - 20) pop.style.top = (rect.top - popRect.height - 4) + 'px';
+  });
+  document.addEventListener('click', (e) => { if (_csvPopEl && !e.target.closest('.csv-cell-pop') && !e.target.closest('td[data-ci]')) dismiss(); });
 }
 
 let _fileData = null;
@@ -14651,6 +14991,27 @@ function _fileTypeIcon(name, type) {
 let _filesPath = '/';
 let _filesCwd = '/';   // saved working directory (persisted on server)
 let _filesShowHidden = false;
+
+async function openInFinder() {
+  const path = _filesPath || '/';
+  // If accessing remote server, construct smb:// or sftp:// URL for Finder
+  const isRemote = location.hostname !== 'localhost' && location.hostname !== '127.0.0.1' && !location.hostname.endsWith('.local');
+  if (isRemote) {
+    // Open as SFTP remote folder in Finder via sftp:// URL scheme
+    const host = location.hostname;
+    const url = 'sftp://' + host + path;
+    window.open(url, '_blank');
+    showToast('Opening remote folder: ' + host + ':' + path);
+    return;
+  }
+  try {
+    const r = await apiCall(API + '/api/fs/open', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ path })
+    });
+    if (r) showToast('Opened in Finder');
+  } catch(e) { showToast('Failed to open folder'); }
+}
 
 // ── File bookmarks (quick-access folders) ──
 const _FILES_HOME = window._AMUX_HOME || '/root';
@@ -16393,6 +16754,12 @@ let boardOwnerFilter = localStorage.getItem('amux_board_owner') || 'human';
 let _sessionGroupCollapsed = JSON.parse(localStorage.getItem('amux_board_collapsed') || '{}');
 let _tagGroupCollapsed = JSON.parse(localStorage.getItem('amux_status_collapsed') || '{}');
 let _collapsedCols = new Set(JSON.parse(localStorage.getItem('amux_col_collapsed') || '[]'));
+let _boardColPages = {};  // tracks how many cards to show per column (lazy load)
+
+function _boardShowMore(colId, pageSize) {
+  _boardColPages[colId] = (_boardColPages[colId] || pageSize) + pageSize;
+  renderBoard();
+}
 
 const _BUILT_IN_STATUS_STYLE = {
   'backlog':   {bg:'rgba(88,166,255,0.12)',color:'var(--accent)',border:'rgba(88,166,255,0.3)',dot:'var(--accent)'},
@@ -17428,20 +17795,24 @@ function renderScheduler() {
             <div style="font-weight:600;font-size:0.85rem;">${esc(s.title)}</div>
             <div style="font-size:0.72rem;color:var(--dim);margin-top:2px;">
               <span style="color:var(--accent);">${esc(s.session)}</span>
-              &nbsp;·&nbsp;<code style="font-size:0.7rem;background:var(--card);border:1px solid var(--border);border-radius:3px;padding:0 3px;">${esc(s.command)}</code>
+              &nbsp;·&nbsp;<code style="font-size:0.7rem;background:var(--card);border:1px solid var(--border);border-radius:3px;padding:0 3px;">${esc(s.command.length > 60 ? s.command.slice(0,60) + '…' : s.command)}</code>
             </div>
             <div style="font-size:0.7rem;color:var(--dim);margin-top:5px;display:flex;gap:10px;flex-wrap:wrap;">
               <span>🔁 ${esc(recLabel)}</span>
               <span>▶ next: <strong style="color:var(--text);">${esc(nextRun)}</strong></span>
               <span>✓ last: ${esc(lastRun)}</span>
               <span>runs: <strong>${s.run_count || 0}</strong></span>
+              ${s.watch ? `<span style="color:var(--accent);">👁 watching</span>` : ''}
+              ${s.done_pattern ? `<span style="color:var(--dim);">stop: <code style="font-size:0.65rem;">${esc(s.done_pattern)}</code></span>` : ''}
             </div>
-          </div>
-          <div style="display:flex;gap:4px;flex-shrink:0;">
-            <button class="btn" style="font-size:0.7rem;padding:2px 8px;"
-              onclick="openSchedModal('${esc(s.id)}')">Edit</button>
-            <button class="btn" style="font-size:0.7rem;padding:2px 8px;color:var(--red);"
-              onclick="deleteSchedule('${esc(s.id)}')">Delete</button>
+            <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+              <button class="btn" style="font-size:0.72rem;padding:4px 12px;"
+                onclick="runScheduleNow('${esc(s.id)}')">Run Now</button>
+              <button class="btn" style="font-size:0.72rem;padding:4px 12px;"
+                onclick="openSchedModal('${esc(s.id)}')">Edit</button>
+              <button class="btn" style="font-size:0.72rem;padding:4px 12px;color:var(--red);"
+                onclick="deleteSchedule('${esc(s.id)}')">Delete</button>
+            </div>
           </div>
         </div>
       </div>`;
@@ -17462,6 +17833,16 @@ function renderScheduler() {
         ${r.note ? `<span style="color:var(--red);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(r.note)}">${esc(r.note)}</span>` : ''}
       </div>`;
     }).join('');
+  }
+}
+
+async function runScheduleNow(id) {
+  const r = await apiCall(API + '/api/schedules/' + id + '/run', {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}'
+  });
+  if (r) {
+    await Promise.all([fetchSchedules(), fetchSchedulerRuns()]);
+    renderScheduler();
   }
 }
 
@@ -17795,7 +18176,11 @@ function _renderBoardBySession(visible, container) {
     html += '<div class="board-session-counts">' + _sessionCountsHtml(humanItems) + '</div></div>';
     if (!collapsed) {
       html += '<div class="board-session-items">';
-      humanItems.forEach(function(item) { html += _renderBoardCard(item); });
+      const _hPage = _boardColPages['__human__'] || 20;
+      const _hVisible = humanItems.slice(0, _hPage);
+      const _hRem = humanItems.length - _hPage;
+      _hVisible.forEach(function(item) { html += _renderBoardCard(item); });
+      if (_hRem > 0) html += '<button class="board-add-btn" style="color:var(--accent);border-color:var(--accent);opacity:0.8;" onclick="event.stopPropagation();_boardShowMore(\'__human__\',20)">Show ' + Math.min(_hRem, 20) + ' more (' + _hRem + ' remaining)</button>';
       html += '</div>';
     }
     html += '</div>';
@@ -17813,7 +18198,11 @@ function _renderBoardBySession(visible, container) {
     html += '<div class="board-session-counts">' + _sessionCountsHtml(items) + '</div></div>';
     if (!collapsed) {
       html += '<div class="board-session-items">';
-      items.forEach(function(item) { html += _renderBoardCard(item); });
+      const _sPage = _boardColPages[groupKey] || 20;
+      const _sVisible = items.slice(0, _sPage);
+      const _sRem = items.length - _sPage;
+      _sVisible.forEach(function(item) { html += _renderBoardCard(item); });
+      if (_sRem > 0) html += '<button class="board-add-btn" style="color:var(--accent);border-color:var(--accent);opacity:0.8;" onclick="event.stopPropagation();_boardShowMore(\'' + esc(groupKey) + '\',20)">Show ' + Math.min(_sRem, 20) + ' more (' + _sRem + ' remaining)</button>';
       html += '</div>';
     }
     html += '</div>';
@@ -17908,7 +18297,14 @@ function renderBoard() {
       html += '<div class="board-empty">Nothing here</div>';
     }
     stCol.sort((a, b) => (b.pinned || 0) - (a.pinned || 0));
-    stCol.forEach(item => { html += _renderBoardCard(item); });
+    const PAGE_SIZE = 20;
+    const showCount = _boardColPages[st] || PAGE_SIZE;
+    const visibleCards = stCol.slice(0, showCount);
+    const remaining = stCol.length - showCount;
+    visibleCards.forEach(item => { html += _renderBoardCard(item); });
+    if (remaining > 0) {
+      html += '<button class="board-add-btn" style="color:var(--accent);border-color:var(--accent);opacity:0.8;" onclick="event.stopPropagation();_boardShowMore(\'' + st + '\',' + PAGE_SIZE + ')">Show ' + Math.min(remaining, PAGE_SIZE) + ' more (' + remaining + ' remaining)</button>';
+    }
     if (st === 'done' && stCol.length > 0) {
       html += '<button class="board-add-btn" style="color:var(--red);border-color:rgba(248,81,73,0.2);" onclick="clearDone()">Clear done</button>';
     }
@@ -18060,6 +18456,10 @@ function updateSchedRecUI() {
   document.getElementById('sched-monthday-field').style.display = rec === 'monthly' ? '' : 'none';
   document.getElementById('sched-time-field').style.display = rec === 'hourly' ? 'none' : '';
 }
+function updateSchedWatchUI() {
+  document.getElementById('sched-watch-fields').style.display =
+    document.getElementById('sched-watch').checked ? '' : 'none';
+}
 function openSchedModal(editId) {
   _schedEditId = editId || null;
   const overlay = document.getElementById('sched-overlay');
@@ -18076,6 +18476,10 @@ function openSchedModal(editId) {
       document.getElementById('sched-run-at').value = s.run_at || '';
       document.getElementById('sched-expr').value = s.schedule_expr || '';
       if (s.recurrence) document.getElementById('sched-recurrence').value = s.recurrence;
+      document.getElementById('sched-watch').checked = !!s.watch;
+      document.getElementById('sched-done-pattern').value = s.done_pattern || '';
+      document.getElementById('sched-done-action').value = s.done_action || 'disable';
+      document.getElementById('sched-watch-timeout').value = s.watch_timeout || 120;
     }
     document.getElementById('sched-save-btn').textContent = 'Update';
   } else {
@@ -18084,10 +18488,15 @@ function openSchedModal(editId) {
     document.getElementById('sched-expr').value = '';
     document.getElementById('sched-type').value = 'once';
     document.getElementById('sched-run-at').value = new Date(Date.now() + 3600000).toISOString().slice(0,16);
+    document.getElementById('sched-watch').checked = false;
+    document.getElementById('sched-done-pattern').value = '';
+    document.getElementById('sched-done-action').value = 'disable';
+    document.getElementById('sched-watch-timeout').value = 120;
     document.getElementById('sched-save-btn').textContent = 'Save';
   }
   updateSchedTypeUI();
   updateSchedRecUI();
+  updateSchedWatchUI();
   overlay.style.display = 'flex';
   requestAnimationFrame(() => overlay.classList.add('active'));
   setTimeout(() => document.getElementById('sched-title').focus(), 50);
@@ -18121,8 +18530,13 @@ async function saveSchedModal() {
     }
   }
   const schedExpr = document.getElementById('sched-expr').value.trim();
+  const watch = document.getElementById('sched-watch').checked ? 1 : 0;
+  const donePattern = document.getElementById('sched-done-pattern').value.trim();
+  const doneAction = document.getElementById('sched-done-action').value;
+  const watchTimeout = parseInt(document.getElementById('sched-watch-timeout').value) || 120;
   const payload = { title, session, command, sched_type: stype, recurrence: recurrence || null, run_at,
-                    schedule_expr: schedExpr || null };
+                    schedule_expr: schedExpr || null,
+                    watch, done_pattern: donePattern || null, done_action: doneAction, watch_timeout: watchTimeout };
   const url = _schedEditId ? API + '/api/schedules/' + _schedEditId : API + '/api/schedules';
   const method = _schedEditId ? 'PATCH' : 'POST';
   const r = await apiCall(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
@@ -18553,9 +18967,14 @@ function _fcInit() {
   if (_viewMap[savedView]) savedView = _viewMap[savedView];
   if (!['dayGridMonth','timeGridWeek','timeGridDay'].includes(savedView)) savedView = 'dayGridMonth';
   const isDark = document.documentElement.getAttribute('data-theme') === 'dark' || (!document.body.classList.contains('light'));
+  const isMobile = window.innerWidth <= 600;
   _fcInstance = new FullCalendar.Calendar(el, {
-    initialView: savedView,
-    headerToolbar: {
+    initialView: isMobile ? 'timeGridDay' : savedView,
+    headerToolbar: isMobile ? {
+      left: 'prev,next today',
+      center: 'title',
+      right: 'dayGridMonth,timeGridWeek,timeGridDay',
+    } : {
       left: 'prev,today,next',
       center: 'title',
       right: 'dayGridMonth,timeGridWeek,timeGridDay subscribe',
@@ -18567,7 +18986,7 @@ function _fcInit() {
       },
     },
     events: function(info, successCallback) { successCallback(_fcGetEvents()); },
-    height: window.innerHeight - el.getBoundingClientRect().top - 16,
+    height: window.innerHeight - el.getBoundingClientRect().top,
     nowIndicator: true,
     navLinks: true,
     editable: false,
@@ -18608,7 +19027,7 @@ function _fcInit() {
   setTimeout(() => { if (_fcInstance) _fcInstance.updateSize(); }, 50);
   // Resize handler
   if (!window._fcResizeHandler) {
-    window._fcResizeHandler = () => { if (_fcInstance && activeView === 'calendar') { const c = document.getElementById('fc-container'); if (c) _fcInstance.setOption('height', window.innerHeight - c.getBoundingClientRect().top - 16); } };
+    window._fcResizeHandler = () => { if (_fcInstance && activeView === 'calendar') { const c = document.getElementById('fc-container'); if (c) _fcInstance.setOption('height', window.innerHeight - c.getBoundingClientRect().top); } };
     window.addEventListener('resize', window._fcResizeHandler);
   }
 }
@@ -25569,7 +25988,26 @@ class CCHandler(BaseHTTPRequestHandler):
 
         # GET /api/sessions
         if method == "GET" and path == "/api/sessions":
-            return self._json(list_sessions())
+            # Use shared SSE cache to avoid redundant subprocess calls on concurrent requests
+            now = time.time()
+            sc = _sse_cache["sessions"]
+            if now - sc["time"] > _SSE_CACHE_TTL:
+                if _sse_cache_lock.acquire(blocking=False):
+                    try:
+                        if time.time() - sc["time"] > _SSE_CACHE_TTL:  # double-check
+                            data = list_sessions()
+                            sc["data"] = data
+                            sc["json"] = json.dumps(data, sort_keys=True)
+                            sc["time"] = time.time()
+                    finally:
+                        _sse_cache_lock.release()
+                else:
+                    # Another thread is refreshing — wait briefly for it
+                    for _ in range(50):
+                        time.sleep(0.1)
+                        if time.time() - sc["time"] <= _SSE_CACHE_TTL:
+                            break
+            return self._json(sc["data"] if sc["data"] is not None else list_sessions())
 
         # GET/POST /api/memory/global
         if path == "/api/memory/global":
@@ -26549,6 +26987,31 @@ class CCHandler(BaseHTTPRequestHandler):
             except PermissionError:
                 return self._json({"error": "permission denied"}, 403)
 
+        # ── Open directory in native file manager ──
+        if method == "POST" and path == "/api/fs/open":
+            data = self._read_body()
+            dir_path = data.get("path", "/")
+            # Resolve to absolute path
+            target = Path(dir_path).expanduser().resolve()
+            if not target.exists():
+                return self._json({"error": "path not found"}, 404)
+            if target.is_file():
+                target = target.parent
+            import platform
+            plat = platform.system()
+            try:
+                if plat == "Darwin":
+                    subprocess.Popen(["open", str(target)])
+                elif plat == "Linux":
+                    subprocess.Popen(["xdg-open", str(target)])
+                elif plat == "Windows":
+                    subprocess.Popen(["explorer", str(target)])
+                else:
+                    return self._json({"error": f"unsupported platform: {plat}"}, 400)
+                return self._json({"ok": True, "path": str(target)})
+            except Exception as e:
+                return self._json({"error": str(e)}, 500)
+
         # ── Directory upload (Files view) ──
         if method == "POST" and path == "/api/fs/upload":
             ctype = self.headers.get("Content-Type", "")
@@ -26936,6 +27399,10 @@ class CCHandler(BaseHTTPRequestHandler):
                     "run_at": run_at, "next_run": run_at,
                     "last_run": None, "enabled": 1, "run_count": 0,
                     "schedule_expr": schedule_expr or None,
+                    "watch": int(data.get("watch") or 0),
+                    "watch_timeout": int(data.get("watch_timeout") or 120),
+                    "done_pattern": data.get("done_pattern") or None,
+                    "done_action": data.get("done_action") or "disable",
                     "created": now_ts, "updated": now_ts, "deleted": None,
                 }
                 # compute next_run — prefer schedule_expr if provided
@@ -26947,12 +27414,16 @@ class CCHandler(BaseHTTPRequestHandler):
                     sched["next_run"] = _next_run_dt(sched) or run_at
                 db.execute(
                     """INSERT INTO schedules (id,title,session,command,sched_type,recurrence,
-                       run_at,next_run,last_run,enabled,run_count,schedule_expr,created,updated,deleted)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       run_at,next_run,last_run,enabled,run_count,schedule_expr,
+                       watch,watch_timeout,done_pattern,done_action,
+                       created,updated,deleted)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (sched["id"], sched["title"], sched["session"], sched["command"],
                      sched["sched_type"], sched["recurrence"], sched["run_at"],
                      sched["next_run"], sched["last_run"], sched["enabled"],
                      sched["run_count"], sched["schedule_expr"],
+                     sched["watch"], sched["watch_timeout"],
+                     sched["done_pattern"], sched["done_action"],
                      sched["created"], sched["updated"], sched["deleted"])
                 )
                 db.commit()
@@ -26973,6 +27444,23 @@ class CCHandler(BaseHTTPRequestHandler):
                 self._json([dict(r) for r in rows])
                 return
 
+            # POST /api/schedules/<id>/run — run now (manual trigger)
+            if method == "POST" and sched_id.endswith("/run"):
+                sid_for_run = sched_id[:-4]  # strip "/run"
+                db = get_db()
+                row = db.execute("SELECT * FROM schedules WHERE id=? AND deleted IS NULL", (sid_for_run,)).fetchone()
+                if not row:
+                    self._json({"error": "not found"}, 404); return
+                cols = _sched_cols(db)
+                sched = _sched_row_to_dict(row, cols)
+                _run_schedule(sched)
+                now_str = _dt.now().strftime("%Y-%m-%dT%H:%M")
+                db.execute("UPDATE schedules SET last_run=?, updated=? WHERE id=?",
+                           (now_str, int(_time.time()), sid_for_run))
+                db.commit()
+                self._json({"ok": True, "ran": sched["title"]})
+                return
+
             # GET /api/schedules/<id>
             if method == "GET":
                 db = get_db()
@@ -26991,7 +27479,8 @@ class CCHandler(BaseHTTPRequestHandler):
                 cols = _sched_cols(db)
                 sched = _sched_row_to_dict(row, cols)
                 body = self._read_body()
-                for k in ("title","session","command","sched_type","recurrence","run_at","enabled","schedule_expr"):
+                for k in ("title","session","command","sched_type","recurrence","run_at","enabled","schedule_expr",
+                          "watch","watch_timeout","done_pattern","done_action"):
                     if k in body:
                         sched[k] = body[k]
                 expr = (sched.get("schedule_expr") or "").strip()
@@ -27003,10 +27492,15 @@ class CCHandler(BaseHTTPRequestHandler):
                 sched["updated"] = int(_time.time())
                 db.execute(
                     """UPDATE schedules SET title=?,session=?,command=?,sched_type=?,recurrence=?,
-                       run_at=?,next_run=?,enabled=?,schedule_expr=?,updated=? WHERE id=?""",
+                       run_at=?,next_run=?,enabled=?,schedule_expr=?,
+                       watch=?,watch_timeout=?,done_pattern=?,done_action=?,
+                       updated=? WHERE id=?""",
                     (sched["title"], sched["session"], sched["command"], sched["sched_type"],
                      sched["recurrence"], sched["run_at"], sched["next_run"],
-                     sched["enabled"], sched.get("schedule_expr"), sched["updated"], sched_id)
+                     sched["enabled"], sched.get("schedule_expr"),
+                     int(sched.get("watch") or 0), int(sched.get("watch_timeout") or 120),
+                     sched.get("done_pattern"), sched.get("done_action") or "disable",
+                     sched["updated"], sched_id)
                 )
                 db.commit()
                 self._json(sched)
@@ -29329,6 +29823,22 @@ def _auto_archive_idle():
         slog(f"[auto-archive] archived {len(archived)} idle sessions: {', '.join(archived)}")
 
 
+def _enforce_archived_stopped():
+    """Stop any archived sessions that still have running tmux processes."""
+    stopped = []
+    for env_file in sorted(CC_SESSIONS.glob("*.env")):
+        name = env_file.stem
+        cfg = parse_env_file(env_file)
+        if cfg.get("CC_ARCHIVED") == "1" and is_running(name):
+            try:
+                stop_session(name)
+                stopped.append(name)
+            except Exception:
+                pass
+    if stopped:
+        slog(f"[cleanup] stopped {len(stopped)} archived sessions still running: {', '.join(stopped)}")
+
+
 def _cleanup_old_transcripts():
     """Remove conversation transcripts older than 7 days and larger than 50 MB."""
     projects_dir = Path.home() / ".claude" / "projects"
@@ -29416,7 +29926,7 @@ def _cleanup_recordings():
 def _db_maintenance():
     """Periodic database maintenance: WAL checkpoint and optimize."""
     try:
-        conn = _get_db()
+        conn = get_db()
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         conn.execute("PRAGMA optimize")
         slog("[cleanup] database maintenance: WAL checkpoint + optimize")
@@ -29817,6 +30327,7 @@ def main():
     schedule_job(_email_sync_job,        interval=_EMAIL_SYNC_INTERVAL, name="email_sync",  initial_delay=20)
     schedule_job(_cleanup_tmp,           interval=1800,                 name="tmp_cleanup", initial_delay=60)
     schedule_job(_auto_archive_idle,     interval=3600,                 name="auto_archive", initial_delay=300)
+    schedule_job(_enforce_archived_stopped, interval=600,                name="archive_enforce", initial_delay=30)
     schedule_job(_cleanup_old_transcripts, interval=86400,              name="transcript_cleanup", initial_delay=600)
     schedule_job(_cleanup_logs,             interval=86400,              name="log_rotation",       initial_delay=120)
     schedule_job(_cleanup_recordings,       interval=86400,              name="recording_cleanup",  initial_delay=180)
