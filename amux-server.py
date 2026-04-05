@@ -1250,6 +1250,88 @@ def _snapshot_loop():
         pass
 
 
+# ── Browser process reaper ────────────────────────────────────────────────────
+_BROWSER_TTL_SECONDS = 2 * 3600  # 2 hours — kill browser-use Chrome processes older than this
+_last_browser_reap = 0.0
+
+def _reap_stale_browsers():
+    """Kill headless Chrome processes (spawned by browser-use) that exceed the TTL."""
+    global _last_browser_reap
+    now = time.time()
+    if now - _last_browser_reap < 600:  # run at most every 10 minutes
+        return
+    _last_browser_reap = now
+    try:
+        r = subprocess.run(["pgrep", "-f", "browser-use-user-data-dir"],
+                           capture_output=True, text=True, timeout=5)
+        pids = [p.strip() for p in r.stdout.strip().split("\n") if p.strip()]
+        if not pids:
+            return
+        reaped = 0
+        for pid in pids:
+            try:
+                r2 = subprocess.run(["ps", "-o", "etime=", "-p", pid],
+                                    capture_output=True, text=True, timeout=5)
+                etime = r2.stdout.strip()
+                if not etime:
+                    continue
+                # Parse etime: [[DD-]HH:]MM:SS
+                parts = etime.replace("-", ":").split(":")
+                parts = [int(p) for p in parts]
+                if len(parts) == 2: secs = parts[0]*60 + parts[1]
+                elif len(parts) == 3: secs = parts[0]*3600 + parts[1]*60 + parts[2]
+                elif len(parts) == 4: secs = parts[0]*86400 + parts[1]*3600 + parts[2]*60 + parts[3]
+                else: continue
+                if secs > _BROWSER_TTL_SECONDS:
+                    os.kill(int(pid), 9)
+                    reaped += 1
+            except (ProcessLookupError, ValueError, subprocess.TimeoutExpired):
+                pass
+        if reaped:
+            slog(f"[browser-reaper] killed {reaped} stale Chrome processes (>{_BROWSER_TTL_SECONDS//3600}h old)")
+    except Exception:
+        pass
+
+
+# ── Ray Serve killer — Ray should never be running locally for extended periods ──
+_last_ray_check = 0.0
+
+def _kill_stale_ray():
+    """Kill Ray Serve if it's been running for more than 30 minutes.
+    Sessions occasionally start Ray for local testing but never stop it,
+    consuming massive CPU/RAM (multiple ML model workers)."""
+    global _last_ray_check
+    now = time.time()
+    if now - _last_ray_check < 600:
+        return
+    _last_ray_check = now
+    try:
+        r = subprocess.run(["pgrep", "-f", "ray::ServeController"],
+                           capture_output=True, text=True, timeout=5)
+        if not r.stdout.strip():
+            return
+        pid = r.stdout.strip().split("\n")[0]
+        r2 = subprocess.run(["ps", "-o", "etime=", "-p", pid],
+                            capture_output=True, text=True, timeout=5)
+        etime = r2.stdout.strip()
+        if not etime:
+            return
+        parts = etime.replace("-", ":").split(":")
+        parts = [int(p) for p in parts]
+        if len(parts) == 2: secs = parts[0]*60 + parts[1]
+        elif len(parts) == 3: secs = parts[0]*3600 + parts[1]*60 + parts[2]
+        elif len(parts) == 4: secs = parts[0]*86400 + parts[1]*3600 + parts[2]*60 + parts[3]
+        else: return
+        if secs > 1800:  # > 30 minutes
+            subprocess.run("pkill -9 -f 'ray::' 2>/dev/null; pkill -9 -f 'ray/core/src/ray' 2>/dev/null; "
+                           "pkill -9 -f 'ray/dashboard' 2>/dev/null; pkill -9 -f 'ray/autoscaler' 2>/dev/null; "
+                           "pkill -9 -f 'ray.util.client' 2>/dev/null",
+                           shell=True, timeout=15)
+            slog(f"[ray-reaper] killed Ray Serve cluster — was running for {secs//60}m")
+    except Exception:
+        pass
+
+
 def get_claude_stats(work_dir: str) -> dict:
     """Get token usage and last activity from Claude Code session files for a directory."""
     if not work_dir:
@@ -5885,78 +5967,37 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .explore-menu-item:active, .explore-menu-item:hover { background: var(--hover); }
 
   /* Connect session list */
-  /* Calendar */
-  .cal-toolbar { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px 4px; }
-  .cal-nav-row { display: flex; align-items: center; gap: 6px; }
-  .cal-controls-row { display: flex; align-items: center; gap: 6px; }
-  .cal-title { font-weight: 600; font-size: 0.95rem; flex: 1; text-align: center; }
-  .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; background: var(--border); border-radius: 8px; overflow: hidden; margin: 0 8px 16px; }
-  .cal-day-header { background: var(--card); text-align: center; font-size: 0.68rem; color: var(--dim); padding: 5px 2px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
-  .cal-cell { background: var(--card); min-height: 76px; padding: 4px; position: relative; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-  .cal-cell:active { background: var(--hover); }
-  .cal-cell.other-month { background: rgba(0,0,0,0.15); }
-  .cal-cell.other-month .cal-cell-num { opacity: 0.35; }
-  .cal-cell-num { font-size: 0.75rem; color: var(--dim); margin-bottom: 3px; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; border-radius: 50%; }
-  .cal-cell.today .cal-cell-num { background: var(--accent); color: #fff; font-weight: 700; }
-  .cal-chip { font-size: 0.66rem; line-height: 1.25; padding: 2px 4px; border-radius: 3px; margin-bottom: 2px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; display: block; }
-  .cal-chip:active { opacity: 0.7; }
-  .cal-chip.sched-chip { background: rgba(163,113,247,0.18); color: #c084fc; border-left: 2px solid #c084fc; }
-  .cal-more { font-size: 0.62rem; color: var(--dim); padding-left: 2px; }
-  .cal-dots { display: none; gap: 3px; flex-wrap: wrap; padding: 3px 1px 0; }
-  .cal-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-  @media (max-width: 480px) {
-    .cal-grid { margin: 0 0 12px; border-radius: 0; gap: 0; background: none; border-top: 1px solid var(--border); border-left: 1px solid var(--border); }
-    .cal-cell { min-height: unset; aspect-ratio: 1; padding: 3px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); overflow: hidden; }
-    .cal-day-header { font-size: 0.65rem; padding: 6px 2px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-    .cal-cell-num { font-size: 0.7rem; width: 18px; height: 18px; margin-bottom: 0; }
-    .cal-chip { display: none; }
-    .cal-more { display: none; }
-    .cal-dots { display: flex; }
-    .cal-title { font-size: 0.88rem; }
-    .cal-toolbar { padding: 6px 8px 2px; }
-    .cal-nav-row .btn, .cal-controls-row .btn { padding: 5px 8px; font-size: 0.78rem; }
-    .cal-view-tab { padding: 4px 10px; font-size: 0.75rem; }
-    .cal-week-cell { min-height: 80px; }
-    .cal-week-chip { display: none !important; }
-    .cal-week-dot { display: block !important; }
+  /* FullCalendar theme overrides */
+  #fc-container { --fc-border-color: var(--border); --fc-button-bg-color: transparent; --fc-button-border-color: var(--border); --fc-button-text-color: var(--text); --fc-button-hover-bg-color: var(--hover); --fc-button-hover-border-color: var(--border); --fc-button-active-bg-color: var(--accent); --fc-button-active-border-color: var(--accent); --fc-today-bg-color: rgba(56,139,253,0.06); --fc-event-border-color: transparent; --fc-page-bg-color: var(--bg); --fc-neutral-bg-color: var(--bg); --fc-list-event-hover-bg-color: var(--hover); --fc-now-indicator-color: var(--accent); --fc-non-business-color: transparent; }
+  #fc-container .fc { font-family: inherit; font-size: 0.85rem; }
+  #fc-container .fc .fc-toolbar { padding: 8px 4px; gap: 8px; flex-wrap: wrap; }
+  #fc-container .fc .fc-toolbar-title { font-size: 1.05rem; font-weight: 600; }
+  #fc-container .fc .fc-button { font-size: 0.8rem; padding: 5px 12px; border-radius: 6px; font-weight: 500; font-family: inherit; text-transform: none; }
+  #fc-container .fc .fc-button:focus { box-shadow: none; }
+  #fc-container .fc .fc-button-group > .fc-button { border-radius: 0; }
+  #fc-container .fc .fc-button-group > .fc-button:first-child { border-radius: 6px 0 0 6px; }
+  #fc-container .fc .fc-button-group > .fc-button:last-child { border-radius: 0 6px 6px 0; }
+  #fc-container .fc .fc-button-active { background: var(--accent) !important; border-color: var(--accent) !important; color: #fff !important; }
+  #fc-container .fc .fc-col-header-cell { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; padding: 8px 0; }
+  #fc-container .fc .fc-daygrid-day-number { font-size: 0.8rem; padding: 4px 6px; color: var(--dim); }
+  #fc-container .fc .fc-daygrid-day.fc-day-today .fc-daygrid-day-number { background: var(--accent); color: #fff; border-radius: 50%; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; }
+  #fc-container .fc .fc-event { cursor: pointer; border-radius: 4px; font-size: 0.75rem; padding: 1px 4px; border-left-width: 3px; }
+  #fc-container .fc .fc-timegrid-slot { height: 2.5em; }
+  #fc-container .fc .fc-timegrid-slot-label { font-size: 0.72rem; color: var(--dim); }
+  #fc-container .fc .fc-scrollgrid { border: none; }
+  #fc-container .fc .fc-scrollgrid td { border-color: var(--border); }
+  #fc-container .fc .fc-daygrid-day-frame { min-height: 80px; }
+  #fc-container .fc-subscribe-button { font-size: 0.78rem !important; padding: 4px 10px !important; }
+  @media (max-width: 600px) {
+    #fc-container .fc .fc-toolbar { flex-direction: column; align-items: stretch; padding: 6px 2px; gap: 4px; }
+    #fc-container .fc .fc-toolbar-chunk { display: flex; justify-content: center; }
+    #fc-container .fc .fc-toolbar-title { font-size: 0.92rem; }
+    #fc-container .fc .fc-button { font-size: 0.75rem; padding: 4px 8px; }
+    #fc-container .fc .fc-daygrid-day-frame { min-height: 50px; }
+    #fc-container .fc .fc-daygrid-day-number { font-size: 0.72rem; padding: 2px 4px; }
+    #fc-container .fc .fc-event { font-size: 0.68rem; padding: 0 2px; }
+    #fc-container .fc .fc-col-header-cell { font-size: 0.65rem; padding: 6px 0; }
   }
-  /* Calendar view tabs */
-  .cal-view-tabs { display: flex; gap: 3px; flex: 1; justify-content: center; }
-  .cal-view-tab { padding: 5px 14px; border-radius: 6px; border: 1px solid var(--border);
-    background: none; color: var(--dim); font-size: 0.82rem; cursor: pointer;
-    -webkit-tap-highlight-color: transparent; transition: all 0.15s; }
-  .cal-view-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
-  /* Week view */
-  .cal-week-grid { display: grid; grid-template-columns: repeat(7,1fr); gap: 1px;
-    background: var(--border); border-radius: 8px; overflow: hidden; margin: 0 8px 16px; }
-  .cal-week-header { background: var(--card); text-align: center; font-size: 0.68rem;
-    color: var(--dim); padding: 5px 2px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
-  .cal-week-cell { background: var(--card); min-height: 120px; padding: 6px 5px; cursor: pointer;
-    -webkit-tap-highlight-color: transparent; }
-  .cal-week-cell:active { background: var(--hover); }
-  .cal-week-cell.today { border-top: 2px solid var(--accent); }
-  .cal-week-cell.today .cal-week-num { color: var(--accent); font-weight: 700; }
-  .cal-week-num { font-size: 0.72rem; color: var(--dim); margin-bottom: 4px; }
-  .cal-week-chip { font-size: 0.67rem; line-height: 1.3; padding: 2px 5px; border-radius: 3px;
-    margin-bottom: 2px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    display: block; }
-  .cal-week-chip:active { opacity: 0.7; }
-  .cal-week-more { font-size: 0.62rem; color: var(--dim); padding-left: 2px; }
-  .cal-week-dot { display: none; width: 6px; height: 6px; border-radius: 50%; margin: 1px; }
-  /* Day view */
-  .cal-day-view { padding: 6px 12px 16px; }
-  .cal-day-issue { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
-    padding: 10px 12px; margin-bottom: 8px; cursor: pointer;
-    -webkit-tap-highlight-color: transparent; display: flex; align-items: flex-start; gap: 10px; }
-  .cal-day-issue:active { border-color: var(--accent); }
-  .cal-day-issue-text { flex: 1; min-width: 0; }
-  .cal-day-issue-title { font-size: 0.9rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .cal-day-issue-desc { font-size: 0.78rem; color: var(--dim); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .cal-day-empty { color: var(--dim); font-size: 0.88rem; text-align: center; padding: 32px 0; }
-  .cal-day-add { display: block; width: 100%; margin-top: 4px; text-align: center;
-    padding: 10px; border-radius: 8px; border: 1px dashed var(--border); background: none;
-    color: var(--dim); font-size: 0.82rem; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-  .cal-day-add:active { background: var(--hover); }
   /* Board collapse */
   .board-col-collapse { background: none; border: none; cursor: pointer; color: var(--dim);
     font-size: 0.65rem; padding: 4px 6px; border-radius: 3px; line-height: 1; flex-shrink: 0;
@@ -6451,6 +6492,39 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .peek-memory-editor.active { display: flex; }
   .peek-git-panel { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
   .peek-git-panel.active { display: flex; }
+  /* Commits panel */
+  .peek-commits-panel { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+  .peek-commits-panel.active { display: flex; }
+  .commits-layout { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+  .commits-sidebar { width: 280px; flex-shrink: 0; border-right: 1px solid var(--border); overflow-y: auto; background: var(--bg); }
+  .commits-list { }
+  .commits-item { padding: 10px 14px; cursor: pointer; border-bottom: 1px solid rgba(139,148,158,0.08); transition: background 0.08s; }
+  .commits-item:hover { background: rgba(139,148,158,0.06); }
+  .commits-item.active { background: rgba(88,166,255,0.1); border-left: 3px solid var(--accent); }
+  .commits-item-subject { font-size: 0.82rem; font-weight: 500; color: var(--text); line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .commits-item-meta { display: flex; gap: 8px; margin-top: 4px; font-size: 0.7rem; color: var(--dim); }
+  .commits-item-hash { font-family: monospace; font-size: 0.7rem; color: var(--accent); opacity: 0.8; }
+  .commits-detail { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+  .commits-detail-empty { flex: 1; display: flex; align-items: center; justify-content: center; }
+  .commits-back-btn { display: none; background: none; border: none; color: var(--accent); cursor: pointer; padding: 8px 14px; font-size: 0.82rem; text-align: left; border-bottom: 1px solid var(--border); }
+  .commits-detail-header { padding: 14px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .commits-detail-header h3 { margin: 0 0 6px; font-size: 0.95rem; font-weight: 600; color: var(--text); line-height: 1.4; }
+  .commits-detail-header .commits-meta-row { display: flex; gap: 12px; flex-wrap: wrap; font-size: 0.75rem; color: var(--dim); }
+  .commits-detail-header .commits-body-text { margin-top: 8px; font-size: 0.82rem; color: var(--text); white-space: pre-wrap; line-height: 1.5; }
+  .commits-detail-header .commits-stat { margin-top: 10px; font-size: 0.78rem; font-family: monospace; color: var(--dim); white-space: pre-wrap; line-height: 1.4; }
+  .commits-detail-diff { flex: 1; overflow: auto; background: #1e1e2e; padding: 0; }
+  .commits-detail-diff pre { margin: 0; padding: 12px; font-size: 0.78rem; line-height: 1.5; color: #cdd6f4; white-space: pre; }
+  .commits-detail-diff .diff-add { color: #a6e3a1; }
+  .commits-detail-diff .diff-del { color: #f38ba8; }
+  .commits-detail-diff .diff-hdr { color: #89b4fa; font-weight: 600; }
+  .commits-detail-diff .diff-hunk { color: #cba6f7; }
+  @media (max-width: 600px) {
+    .commits-sidebar { width: 100%; position: absolute; top: 0; left: 0; bottom: 0; z-index: 10; transition: transform 0.2s ease; }
+    .commits-layout { position: relative; }
+    .commits-sidebar.hidden { transform: translateX(-110%); }
+    .commits-back-btn { display: block; }
+    .commits-detail-empty { display: none; }
+  }
   .git-panel-header { display:flex;align-items:center;gap:8px;padding:8px 14px;border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap; }
   .git-panel-body { display:flex;flex:1;min-height:0;overflow:hidden;position:relative; }
   /* Left: collapsible dir tree (sidebar) */
@@ -7343,14 +7417,14 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   /* Notes view */
   #notes-view { height: calc(100vh - 110px); }
   .notes-sidebar {
-    width: 220px; min-width: 160px; border-right: 1px solid var(--border);
+    width: 240px; min-width: 180px; border-right: 1px solid var(--border);
     display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0;
-    background: var(--card); transition: width 0.2s ease, min-width 0.2s ease, border 0.2s ease;
+    background: var(--bg); transition: width 0.2s ease, min-width 0.2s ease, border 0.2s ease;
   }
   .notes-sidebar.collapsed { width: 0; min-width: 0; border-right: none; }
   .notes-sidebar-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 10px 12px 6px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+    padding: 10px 12px 6px; flex-shrink: 0;
   }
   .notes-sidebar-actions { display: flex; gap: 4px; align-items: center; }
   .notes-toggle-btn {
@@ -7371,7 +7445,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   }
   .notes-expand-btn:hover { background: rgba(139,148,158,0.12); color: var(--text); }
   #notes-view.sidebar-collapsed .notes-expand-btn { display: flex; }
-  .notes-search-wrap { padding: 6px 8px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .notes-search-wrap { padding: 4px 8px 8px; flex-shrink: 0; }
   .notes-list { flex: 1; overflow-y: auto; }
   .notes-trash-section { flex-shrink: 0; border-top: 1px solid var(--border); }
   .notes-trash-header {
@@ -7408,14 +7482,15 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     #notes-view.sidebar-collapsed .notes-expand-btn { display: flex; }
   }
   .notes-list-item {
-    padding: 8px 12px; cursor: pointer; border-bottom: 1px solid rgba(139,148,158,0.1);
-    font-size: 0.82rem; color: var(--text); line-height: 1.3;
-    transition: background 0.1s; touch-action: manipulation; user-select: none; -webkit-user-select: none;
+    padding: 5px 12px; cursor: pointer;
+    font-size: 0.82rem; color: var(--text); line-height: 1.4;
+    transition: background 0.08s; touch-action: manipulation; user-select: none; -webkit-user-select: none;
+    border-radius: 4px; margin: 1px 6px;
   }
   .notes-list-item:hover { background: rgba(139,148,158,0.08); }
   .notes-list-item.active { background: rgba(88,166,255,0.12); color: var(--accent); }
   .notes-list-item .nli-title { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .notes-list-item .nli-date { font-size: 0.7rem; color: var(--dim); margin-top: 2px; }
+  .notes-list-item .nli-date { display: none; }
   .notes-list-empty { padding: 16px 12px; color: var(--dim); font-size: 0.8rem; text-align: center; }
   .notes-folder-hdr {
     display: flex; align-items: center; gap: 5px; padding: 6px 10px 4px;
@@ -7454,13 +7529,13 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative;
   }
   .notes-editor-header {
-    display: flex; align-items: center; gap: 8px; padding: 8px 12px;
-    border-bottom: 1px solid var(--border); flex-shrink: 0;
+    display: flex; align-items: center; gap: 8px; padding: 10px 16px 8px;
+    flex-shrink: 0;
   }
   .notes-title-input {
     flex: 1; background: transparent; border: none; outline: none;
-    color: var(--text); font-size: 0.95rem; font-weight: 600;
-    font-family: inherit;
+    color: var(--text); font-size: 1.15rem; font-weight: 700;
+    font-family: inherit; letter-spacing: -0.01em;
   }
   .notes-delete-btn {
     background: transparent; border: none; color: var(--dim); cursor: pointer;
@@ -7472,12 +7547,19 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   /* Quill editor fills pane */
   .notes-quill-wrap { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
   .notes-quill-wrap .ql-toolbar.ql-snow {
-    background: var(--card); border-color: var(--border); flex-shrink: 0;
+    background: var(--bg); border: none; border-bottom: 1px solid var(--border); flex-shrink: 0;
+    opacity: 0; max-height: 0; overflow: hidden; transition: opacity 0.15s, max-height 0.15s;
+    padding: 4px 8px;
+  }
+  .notes-quill-wrap:hover .ql-toolbar.ql-snow,
+  .notes-quill-wrap:focus-within .ql-toolbar.ql-snow,
+  .notes-quill-wrap .ql-toolbar.ql-snow.pinned {
+    opacity: 1; max-height: 50px;
   }
   .notes-quill-wrap .ql-container.ql-snow {
-    border-color: var(--border); flex: 1; overflow-y: auto; background: var(--bg);
+    border: none; flex: 1; overflow-y: auto; background: var(--bg);
   }
-  .notes-quill-wrap .ql-editor { color: var(--text); font-size: 0.88rem; line-height: 1.7; min-height: 200px; }
+  .notes-quill-wrap .ql-editor { color: var(--text); font-size: 0.92rem; line-height: 1.75; min-height: 200px; padding: 8px 20px 60px; max-width: 720px; }
   .notes-quill-wrap .ql-editor hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
   .notes-quill-wrap .ql-snow .ql-toolbar .ql-divider { width: 28px; font-size: 0.75rem; color: var(--dim); font-weight: 600; }
   .notes-quill-wrap .ql-snow .ql-toolbar .ql-divider::after { content: '—'; }
@@ -7508,16 +7590,15 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   }
   /* Edit / Preview mode tabs */
   .notes-mode-tabs {
-    display: flex; gap: 2px; padding: 5px 12px; border-bottom: 1px solid var(--border);
-    flex-shrink: 0; background: var(--card);
+    display: flex; gap: 2px; padding: 3px 16px; flex-shrink: 0;
   }
   .notes-mode-tab {
-    background: none; border: none; padding: 4px 14px; border-radius: 5px;
-    font-size: 0.78rem; cursor: pointer; color: var(--dim); font-weight: 500;
-    transition: background 0.12s, color 0.12s;
+    background: none; border: none; padding: 3px 10px; border-radius: 4px;
+    font-size: 0.72rem; cursor: pointer; color: var(--dim); font-weight: 500;
+    transition: background 0.1s, color 0.1s; text-transform: uppercase; letter-spacing: 0.04em;
   }
-  .notes-mode-tab.active { background: var(--accent); color: #fff; }
-  .notes-mode-tab:not(.active):hover { background: rgba(139,148,158,0.12); color: var(--text); }
+  .notes-mode-tab.active { background: rgba(88,166,255,0.12); color: var(--accent); }
+  .notes-mode-tab:not(.active):hover { background: rgba(139,148,158,0.08); color: var(--text); }
   /* Preview pane */
   .notes-preview {
     flex: 1; overflow-y: auto; padding: 20px 24px; background: var(--bg);
@@ -8351,6 +8432,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <div class="tab-bar">
   <button id="tab-sessions" class="active" onclick="switchView('sessions')">Sessions</button>
   <button id="tab-board" onclick="switchView('board')">Board</button>
+  <button id="tab-calendar" onclick="switchView('calendar')">Calendar</button>
   <button id="tab-notifications" onclick="switchView('notifications')">Notifications</button>
   <button id="tab-scheduler" onclick="switchView('scheduler')">Scheduler</button>
   <button id="tab-files" onclick="switchView('files')">Files</button>
@@ -8362,6 +8444,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <button id="tab-metrics" onclick="switchView('metrics')">Metrics</button>
   <button id="tab-torrents" onclick="switchView('torrents')">Torrents</button>
   <button id="tab-terminal" onclick="switchView('terminal')">Terminal</button>
+  <button id="tab-browser" onclick="switchView('browser')">Browser</button>
   <button id="tab-graph" onclick="switchView('graph')">Graph</button>
   <button id="tab-journal" onclick="switchView('journal')">Journal</button>
 </div>
@@ -8419,6 +8502,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <div class="board-filters" id="board-filters"></div>
   <div class="board-columns" id="board-columns"></div>
 </div>
+<!-- Calendar view -->
+<div id="calendar-view" style="display:none;">
+  <div id="fc-container" style="padding:4px 8px;"></div>
+</div>
 <!-- Scheduler view -->
 <div id="scheduler-view" style="display:none;">
   <div style="padding:10px 12px 6px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);">
@@ -8463,6 +8550,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <button class="fe-tb-btn" id="files-hidden-btn" onclick="toggleFilesHidden()" title="Show hidden files">
         <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M1 6.5C1 6.5 3 3 6.5 3S12 6.5 12 6.5 10 10 6.5 10 1 6.5 1 6.5Z" stroke="currentColor" stroke-width="1.3"/><circle cx="6.5" cy="6.5" r="1.5" stroke="currentColor" stroke-width="1.3"/></svg>
       </button>
+      <button class="fe-tb-btn" onclick="_filesNewFile()" title="New file">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M7 1H3a1 1 0 00-1 1v9a1 1 0 001 1h7a1 1 0 001-1V5L7 1z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" fill="none"/><path d="M7 1v4h4M6.5 7v4M4.5 9h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
       <button class="fe-tb-btn" onclick="triggerFilesUpload()" title="Upload files">
         <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M6.5 9V3M3.5 5.5l3-3 3 3M2 10.5h9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
@@ -8498,6 +8588,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
           <span id="files-hidden-oitem-label">Show hidden files</span>
         </button>
         <div class="fe-tb-odivider"></div>
+        <button class="fe-tb-oitem" onclick="_filesNewFile();_filesOverflowClose()">
+          <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M7 1H3a1 1 0 00-1 1v9a1 1 0 001 1h7a1 1 0 001-1V5L7 1z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" fill="none"/><path d="M7 1v4h4M6.5 7v4M4.5 9h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          New file
+        </button>
         <button class="fe-tb-oitem" onclick="triggerFilesUpload();_filesOverflowClose()">
           <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M6.5 9V3M3.5 5.5l3-3 3 3M2 10.5h9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Upload files
@@ -8867,6 +8961,26 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <div id="term-container" style="flex:1;min-height:0;background:#0d1117;border-radius:6px;overflow:hidden;position:relative;">
     <div id="term-placeholder" style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--dim);font-size:0.9rem;">
       Enter a host above and click Connect, or leave blank for a local shell
+    </div>
+  </div>
+</div>
+
+<div id="browser-view" style="display:none;">
+  <div style="display:flex;align-items:center;gap:8px;padding:8px;flex-wrap:wrap;">
+    <select id="bw-profile" style="font-size:0.78rem;padding:4px 8px;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--fg);font-family:inherit;min-width:120px;">
+      <option value="">No profile</option>
+    </select>
+    <button onclick="_bwBack()" style="font-size:0.82rem;padding:4px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;cursor:pointer;color:var(--fg);">&larr;</button>
+    <input id="bw-url" type="text" placeholder="https://example.com" style="flex:1;min-width:200px;font-size:0.82rem;padding:6px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--fg);font-family:inherit;" onkeydown="if(event.key==='Enter')_bwGo()">
+    <button onclick="_bwGo()" style="font-size:0.82rem;padding:4px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:500;">Go</button>
+    <button onclick="_bwScreenshot()" style="font-size:0.82rem;padding:4px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;cursor:pointer;color:var(--fg);">&#128247; Snap</button>
+    <button onclick="_bwSaveProfile()" style="font-size:0.82rem;padding:4px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;cursor:pointer;color:var(--fg);">&#128190; Save Profile</button>
+    <span id="bw-status" style="font-size:0.72rem;color:var(--dim);"></span>
+  </div>
+  <div id="bw-viewport" style="position:relative;padding:0 8px 8px;cursor:crosshair;height:calc(100vh - 160px);overflow:auto;">
+    <img id="bw-img" style="max-width:100%;border:1px solid var(--border);border-radius:4px;display:none;" onclick="_bwClick(event)">
+    <div id="bw-placeholder" style="display:flex;align-items:center;justify-content:center;height:400px;color:var(--dim);font-size:0.9rem;">
+      Enter a URL and click Go to start browsing
     </div>
   </div>
 </div>
@@ -9271,8 +9385,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <div class="peek-tabs">
     <button class="peek-tab active" id="peek-tab-terminal" onclick="setPeekTab('terminal')">Terminal</button>
     <button class="peek-tab" id="peek-tab-issues" onclick="setPeekTab('issues')">Issues</button>
-    <button class="peek-tab" id="peek-tab-memory" onclick="setPeekTab('memory')">Memory</button>
     <button class="peek-tab" id="peek-tab-git" onclick="setPeekTab('git')">Worktree</button>
+    <button class="peek-tab" id="peek-tab-commits" onclick="setPeekTab('commits')">Commits</button>
   </div>
   <!-- Working directory bar -->
   <div class="peek-dir-bar">
@@ -9371,6 +9485,26 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         </div>
       </div>
       <div id="peek-git-empty" style="display:none;color:var(--dim);font-size:0.85rem;padding:20px 16px;">No git repository found for this session.</div>
+    </div>
+  </div>
+  <!-- Commits panel -->
+  <div id="peek-commits-panel" class="peek-commits-panel">
+    <div class="commits-layout">
+      <div class="commits-sidebar" id="commits-sidebar">
+        <div class="commits-list" id="commits-list">
+          <div style="color:var(--dim);font-size:0.85rem;padding:20px 16px;">Loading commits…</div>
+        </div>
+      </div>
+      <div class="commits-detail" id="commits-detail">
+        <button class="commits-back-btn" id="commits-back-btn" onclick="_commitsBack()">&#8592; Commits</button>
+        <div class="commits-detail-empty" id="commits-detail-empty">
+          <div style="color:var(--dim);font-size:0.85rem;">Select a commit to view details</div>
+        </div>
+        <div id="commits-detail-content" style="display:none;flex-direction:column;flex:1;overflow:hidden;">
+          <div class="commits-detail-header" id="commits-detail-header"></div>
+          <div class="commits-detail-diff" id="commits-detail-diff"></div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -9572,7 +9706,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <button class="file-view-tab" id="file-tab-link" onclick="_copyFileDeeplink(_fileData&&_fileData.path||'')" title="Copy deep link">Link</button>
     </div>
     <button id="file-save-btn" onclick="_fileSave()" style="display:none;">Save</button>
-    <a id="file-download-btn" style="display:none;font-size:0.72rem;padding:3px 10px;border:1px solid var(--border);border-radius:6px;color:var(--accent);text-decoration:none;white-space:nowrap;flex-shrink:0;">&#x2B07; Download</a>
+    <button id="file-download-btn" onclick="_fileDownload()" style="display:none;font-size:0.72rem;padding:3px 10px;border:1px solid var(--border);border-radius:6px;color:var(--accent);background:transparent;cursor:pointer;white-space:nowrap;flex-shrink:0;">&#x2B07; Download</button>
     <button class="btn" onclick="closeFilePreview()" style="flex-shrink:0;">&#x2715;</button>
   </div>
   <div id="file-body" class="file-overlay-body"></div>
@@ -11073,6 +11207,7 @@ document.addEventListener('click', e => {
 const ALL_TABS = [
   { id: 'sessions',      label: 'Sessions',   required: true },
   { id: 'board',         label: 'Board' },
+  { id: 'calendar',      label: 'Calendar' },
   { id: 'notifications', label: 'Notifications' },
   { id: 'scheduler',     label: 'Scheduler' },
   { id: 'files',         label: 'Files' },
@@ -11085,6 +11220,7 @@ const ALL_TABS = [
   { id: 'metrics',       label: 'Metrics' },
   { id: 'torrents',      label: 'Torrents' },
   { id: 'terminal',      label: 'Terminal' },
+  { id: 'browser',       label: 'Browser' },
   { id: 'graph',         label: 'Graph' },
   { id: 'journal',       label: 'Journal' },
 ];
@@ -11848,18 +11984,123 @@ function setPeekTab(tab) {
   _peekTab = tab;
   document.getElementById('peek-tab-terminal').classList.toggle('active', tab === 'terminal');
   document.getElementById('peek-tab-issues').classList.toggle('active', tab === 'issues');
-  document.getElementById('peek-tab-memory').classList.toggle('active', tab === 'memory');
   document.getElementById('peek-tab-git').classList.toggle('active', tab === 'git');
+  document.getElementById('peek-tab-commits').classList.toggle('active', tab === 'commits');
   document.getElementById('peek-terminal-panel').style.display = tab === 'terminal' ? '' : 'none';
   const issues = document.getElementById('peek-issues-panel');
   if (tab === 'issues') { issues.classList.add('active'); renderPeekIssues(); }
   else { issues.classList.remove('active'); }
-  const mem = document.getElementById('peek-memory-panel');
-  if (tab === 'memory') { mem.classList.add('active'); loadPeekMemory(); }
-  else { mem.classList.remove('active'); }
   const git = document.getElementById('peek-git-panel');
   if (tab === 'git') { git.classList.add('active'); loadPeekGit(); }
   else { git.classList.remove('active'); }
+  const commits = document.getElementById('peek-commits-panel');
+  if (tab === 'commits') { commits.classList.add('active'); _commitsLoad(); }
+  else { commits.classList.remove('active'); }
+}
+
+// ── Commits panel ──
+let _commitsData = [];
+let _commitsActiveHash = null;
+
+async function _commitsLoad() {
+  if (!peekSession) return;
+  const list = document.getElementById('commits-list');
+  list.innerHTML = '<div style="color:var(--dim);font-size:0.85rem;padding:20px 16px;">Loading commits…</div>';
+  try {
+    const r = await fetch(API + '/api/sessions/' + encodeURIComponent(peekSession) + '/git/commits?count=40');
+    const d = await r.json();
+    _commitsData = d.commits || [];
+    _commitsRenderList();
+  } catch(e) {
+    list.innerHTML = '<div style="color:var(--dim);font-size:0.85rem;padding:20px 16px;">Failed to load commits.</div>';
+  }
+}
+
+function _commitsRenderList() {
+  const list = document.getElementById('commits-list');
+  if (!_commitsData.length) {
+    list.innerHTML = '<div style="color:var(--dim);font-size:0.85rem;padding:20px 16px;">No commits found.</div>';
+    return;
+  }
+  let html = '';
+  let lastDate = '';
+  for (const c of _commitsData) {
+    const d = c.date ? c.date.slice(0, 10) : '';
+    if (d !== lastDate) {
+      lastDate = d;
+      const dt = new Date(d + 'T00:00:00');
+      const label = dt.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
+      html += `<div style="padding:8px 14px 4px;font-size:0.72rem;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:0.03em;background:var(--bg);position:sticky;top:0;z-index:1;">${esc(label)}</div>`;
+    }
+    const active = c.hash === _commitsActiveHash ? ' active' : '';
+    const shortHash = c.hash.slice(0, 7);
+    const time = c.date ? c.date.slice(11, 16) : '';
+    html += `<div class="commits-item${active}" data-hash="${c.hash}" onclick="_commitsSelect('${c.hash}')">`;
+    html += `<div class="commits-item-subject">${esc(c.subject)}</div>`;
+    html += `<div class="commits-item-meta"><span class="commits-item-hash">${shortHash}</span><span>${esc(c.author)}</span><span>${time}</span></div>`;
+    html += `</div>`;
+  }
+  list.innerHTML = html;
+}
+
+async function _commitsSelect(hash) {
+  _commitsActiveHash = hash;
+  // Highlight in list
+  document.querySelectorAll('#commits-list .commits-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.hash === hash);
+  });
+  // On mobile, hide sidebar
+  if (window.innerWidth <= 600) {
+    document.getElementById('commits-sidebar').classList.add('hidden');
+  }
+  const content = document.getElementById('commits-detail-content');
+  const empty = document.getElementById('commits-detail-empty');
+  const hdr = document.getElementById('commits-detail-header');
+  const diffEl = document.getElementById('commits-detail-diff');
+  empty.style.display = 'none';
+  content.style.display = 'flex';
+  hdr.innerHTML = '<div style="color:var(--dim);font-size:0.85rem;">Loading…</div>';
+  diffEl.innerHTML = '';
+  try {
+    const r = await fetch(API + '/api/sessions/' + encodeURIComponent(peekSession) + '/git/commit-detail?sha=' + hash);
+    const d = await r.json();
+    let headerHtml = `<h3>${esc(d.subject || '')}</h3>`;
+    headerHtml += `<div class="commits-meta-row">`;
+    headerHtml += `<span style="font-family:monospace;color:var(--accent);">${(d.hash || hash).slice(0, 10)}</span>`;
+    headerHtml += `<span>${esc(d.author || '')}</span>`;
+    if (d.date) {
+      const dt = new Date(d.date.replace(' ', 'T'));
+      headerHtml += `<span>${dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} ${dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</span>`;
+    }
+    headerHtml += `</div>`;
+    if (d.body) headerHtml += `<div class="commits-body-text">${esc(d.body)}</div>`;
+    if (d.stat) headerHtml += `<div class="commits-stat">${esc(d.stat)}</div>`;
+    hdr.innerHTML = headerHtml;
+    // Render diff with syntax coloring
+    if (d.diff) {
+      const lines = d.diff.split('\n').map(line => {
+        const e = esc(line);
+        if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff --git')) return `<span class="diff-hdr">${e}</span>`;
+        if (line.startsWith('@@')) return `<span class="diff-hunk">${e}</span>`;
+        if (line.startsWith('+')) return `<span class="diff-add">${e}</span>`;
+        if (line.startsWith('-')) return `<span class="diff-del">${e}</span>`;
+        return e;
+      });
+      diffEl.innerHTML = `<pre>${lines.join('\n')}</pre>`;
+    } else {
+      diffEl.innerHTML = '<div style="padding:16px;color:var(--dim);font-size:0.85rem;">No diff available</div>';
+    }
+  } catch(e) {
+    hdr.innerHTML = '<div style="color:var(--dim);font-size:0.85rem;">Failed to load commit details.</div>';
+  }
+}
+
+function _commitsBack() {
+  // Mobile: show sidebar again
+  document.getElementById('commits-sidebar').classList.remove('hidden');
+  _commitsActiveHash = null;
+  document.getElementById('commits-detail-content').style.display = 'none';
+  document.getElementById('commits-detail-empty').style.display = '';
 }
 
 let _peekTrackedFiles = null; // tracked files for current peek session
@@ -12322,6 +12563,7 @@ function openPeek(name, opts) {
   document.getElementById('peek-terminal-panel').style.display = '';
   document.getElementById('peek-memory-panel').classList.remove('active');
   document.getElementById('peek-git-panel').classList.remove('active');
+  document.getElementById('peek-commits-panel').classList.remove('active');
   // Update dir bar
   document.getElementById('peek-dir-text').textContent = peekSessionDir || '(unknown)';
   const prefillQuery = opts && opts.query ? opts.query : '';
@@ -12571,8 +12813,15 @@ async function refreshPeek() {
     // Clear sending indicator when output changes
     if (_sendingSnapshot && newHTML !== _sendingSnapshot) clearSendingIndicator();
     lastPeekHTML = newHTML;
-    applyPeekSearch();
-    if (atBottom) body.scrollTop = body.scrollHeight;
+    const hasSearch = peekSearchQuery.trim().length > 0;
+    const savedScrollTop = body.scrollTop;
+    applyPeekSearch(hasSearch);  // keepIndex=true when search is active
+    if (hasSearch) {
+      // Preserve scroll position when user is searching — don't jump
+      body.scrollTop = savedScrollTop;
+    } else if (atBottom) {
+      body.scrollTop = body.scrollHeight;
+    }
     statusEl.textContent = (data.saved ? 'Saved log' : 'Updated') + ' ' + new Date().toLocaleTimeString();
     // Cache peek output for offline browsing
     _idb.set('peek_' + peekSession, { output, time: Date.now() });
@@ -14118,7 +14367,7 @@ function _renderFileBody(data, mode) {
   // Text files — Raw / Edit / Preview
   const editWrap = document.getElementById('file-edit-wrap');
   const editTa = document.getElementById('file-edit-ta');
-  if (mode === 'edit' && data.is_markdown) {
+  if (mode === 'edit' && (data.is_markdown || data._isNew)) {
     body.style.display = 'none';
     editWrap.style.display = 'flex';
     editTa.value = data.content;
@@ -14196,7 +14445,7 @@ function setFileViewMode(mode) {
   document.getElementById('file-tab-raw').classList.toggle('active', mode === 'raw');
   const editTab = document.getElementById('file-tab-edit');
   if (editTab) editTab.classList.toggle('active', mode === 'edit');
-  document.getElementById('file-save-btn').style.display = (mode === 'edit' && _fileData && _fileData.is_markdown) ? '' : 'none';
+  document.getElementById('file-save-btn').style.display = (mode === 'edit' && _fileData && (_fileData.is_markdown || _fileData._isNew)) ? '' : 'none';
   if (_fileData) _renderFileBody(_fileData, mode);
 }
 
@@ -14228,14 +14477,11 @@ async function openFilePreview(path) {
       // Show Edit tab only for markdown
       document.getElementById('file-tab-edit').style.display = data.is_markdown ? '' : 'none';
     }
-    // Show download button for binary/audio/video/image (not text — they use copy)
-    if (!isTextFile) {
-      const dlBtn = document.getElementById('file-download-btn');
-      const rawUrl = API + '/api/file/raw?path=' + encodeURIComponent(data.path);
-      dlBtn.href = rawUrl;
-      dlBtn.download = data.path.split('/').pop();
-      dlBtn.style.display = '';
-    }
+    // Show download button for all files
+    const dlBtn = document.getElementById('file-download-btn');
+    dlBtn.dataset.url = API + '/api/file/raw?path=' + encodeURIComponent(data.path);
+    dlBtn.dataset.filename = data.path.split('/').pop();
+    dlBtn.style.display = '';
     _renderFileBody(data, _fileViewMode);
     // Update cache
     _idb.setFile(path, { type: 'file', data });
@@ -14270,8 +14516,31 @@ function closeFilePreview() {
   _fileViewMode = 'preview';
 }
 
+async function _fileDownload() {
+  const dlBtn = document.getElementById('file-download-btn');
+  const url = dlBtn.dataset.url;
+  const filename = dlBtn.dataset.filename || 'download';
+  try {
+    dlBtn.textContent = '⏳ …';
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const blob = await r.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    dlBtn.textContent = '✓ Done';
+    setTimeout(() => { dlBtn.textContent = '⬇ Download'; }, 2000);
+  } catch(e) {
+    dlBtn.textContent = '⬇ Download';
+    alert('Download failed: ' + e.message);
+  }
+}
+
 async function _fileSave() {
-  if (!_fileData || !_fileData.is_markdown) return;
+  if (!_fileData || (!_fileData.is_markdown && !_fileData._isNew)) return;
   const ta = document.getElementById('file-edit-ta');
   const btn = document.getElementById('file-save-btn');
   const content = ta.value;
@@ -14285,11 +14554,16 @@ async function _fileSave() {
     });
     const d = await r.json();
     if (d.ok) {
-      _fileData.content = content; // keep in sync
+      _fileData.content = content;
+      if (_fileData._isNew) {
+        _fileData._isNew = false;
+        document.getElementById('file-title').textContent = _fileData.path.split('/').pop();
+        loadFiles(_filesPath); // refresh file list
+      }
       btn.textContent = 'Saved!';
       setTimeout(() => { btn.textContent = 'Save'; btn.classList.remove('saving'); }, 1500);
     } else {
-      btn.textContent = 'Error';
+      btn.textContent = d.error || 'Error';
       btn.classList.remove('saving');
       setTimeout(() => { btn.textContent = 'Save'; }, 2000);
     }
@@ -14601,6 +14875,32 @@ function _filesSearchFilter(q) {
   if (!body || !_filesLastData) return;
   const { path, data, cacheTs } = _filesLastData;
   _renderFilesEntries(body, path, data, cacheTs);
+}
+
+function _filesNewFile() {
+  const name = prompt('File name (e.g. notes.txt, script.py, data.json):');
+  if (!name || !name.trim()) return;
+  const fname = name.trim();
+  const fpath = (_filesPath || '/').replace(/\/$/, '') + '/' + fname;
+  // Open the file overlay in edit mode with empty content
+  _fileData = { path: fpath, content: '', is_markdown: /\.md$/i.test(fname), _isNew: true };
+  _fileViewMode = 'edit';
+  document.getElementById('file-title').textContent = fname + ' (new)';
+  document.getElementById('file-body').className = 'file-overlay-body';
+  document.getElementById('file-body').style.display = 'none';
+  document.getElementById('file-view-tabs').style.display = '';
+  document.getElementById('file-tab-preview').classList.remove('active');
+  document.getElementById('file-tab-raw').classList.remove('active');
+  const editTab = document.getElementById('file-tab-edit');
+  if (editTab) { editTab.style.display = ''; editTab.classList.add('active'); }
+  document.getElementById('file-save-btn').style.display = '';
+  document.getElementById('file-download-btn').style.display = 'none';
+  const ta = document.getElementById('file-edit-ta');
+  const wrap = document.getElementById('file-edit-wrap');
+  ta.value = '';
+  wrap.style.display = 'flex';
+  document.getElementById('file-overlay').classList.add('active');
+  setTimeout(() => ta.focus(), 100);
 }
 
 function triggerFilesUpload() {
@@ -16148,21 +16448,23 @@ let _crmSidebarOpen = localStorage.getItem('amux_crm_sidebar') !== 'closed';
 function switchView(view) {
   if (document.getElementById('grid-view').classList.contains('active')) exitGridMode();
   activeView = view;
-  const _svIds = ['session','board','notifications','scheduler','files','logs','notes','crm','map','metrics','torrents','terminal','graph','journal'];
-  const _svNames = ['sessions','board','notifications','scheduler','files','logs','notes','crm','map','metrics','torrents','terminal','graph','journal'];
-  const _svDisplay = ['','','flex','','flex','flex','flex','flex','flex','flex','flex','flex','flex','flex'];
+  const _svIds = ['session','board','calendar','notifications','scheduler','files','logs','notes','crm','map','metrics','torrents','terminal','browser','graph','journal'];
+  const _svNames = ['sessions','board','calendar','notifications','scheduler','files','logs','notes','crm','map','metrics','torrents','terminal','browser','graph','journal'];
+  const _svDisplay = ['','','flex','flex','','flex','flex','flex','flex','flex','flex','flex','flex','','flex','flex'];
   for (let i = 0; i < _svIds.length; i++) {
     const ve = document.getElementById(_svIds[i] + '-view');
     if (ve) ve.style.display = view === _svNames[i] ? (_svDisplay[i] || '') : 'none';
     const te = document.getElementById('tab-' + _svNames[i]);
     if (te) te.classList.toggle('active', view === _svNames[i]);
   }
+  if (view === 'calendar') { fetchBoard().then(() => { _fcInit(); }); }
   if (view === 'torrents') _torrentLoad();
   if (view === 'terminal') _termInit();
   if (view === 'graph') _graphInit();
   if (view === 'crm') { _crmDirty = false; _crmLoad(); _crmApplySidebarState(); } // always refresh on tab switch
   if (view === 'map') { _mapLoad(); _mapInit(); }
   if (view === 'metrics') { _metricsLoad(); _metricsApplySidebarState(); } // always refresh on tab switch
+  if (view === 'browser') _bwInit();
   if (view === 'journal') _journalInit();
   if (view === 'files') loadFiles(_filesPath);
   else {
@@ -18205,46 +18507,118 @@ async function deleteBoardStatus(id) {
 }
 
 
-// ═══════ CALENDAR ═══════
-let calYear = new Date().getFullYear();
-let calMonth = new Date().getMonth(); // 0-indexed
-let calDay = new Date().getDate();
-let calViewMode = localStorage.getItem('amux_cal_view') || 'week'; // 'month' | 'week' | 'day'
+// ═══════ CALENDAR (FullCalendar) ═══════
+let _fcInstance = null;
 
-function _calNavigate(delta) {
-  let d;
-  if (calViewMode === 'day') {
-    d = new Date(calYear, calMonth, calDay + delta);
-  } else if (calViewMode === 'week') {
-    d = new Date(calYear, calMonth, calDay + delta * 7);
-  } else {
-    calMonth += delta;
-    if (calMonth < 0) { calMonth = 11; calYear--; }
-    else if (calMonth > 11) { calMonth = 0; calYear++; }
-    renderCalendar(); return;
-  }
-  calYear = d.getFullYear(); calMonth = d.getMonth(); calDay = d.getDate();
-  renderCalendar();
-}
-function calPrev() { _calNavigate(-1); }
-function calNext() { _calNavigate(1); }
-function calToday() {
-  const n = new Date();
-  calYear = n.getFullYear(); calMonth = n.getMonth(); calDay = n.getDate();
-  renderCalendar();
-}
-function calSetView(mode) {
-  calViewMode = mode;
-  localStorage.setItem('amux_cal_view', mode);
-  ['month','week','day'].forEach(m => {
-    const el = document.getElementById('cal-tab-' + m);
-    if (el) el.classList.toggle('active', m === mode);
+function _fcGetEvents() {
+  const events = [];
+  (boardItems || []).forEach(item => {
+    if (!item.due || item.deleted) return;
+    const sty = statusStyle(item.status || 'todo');
+    const ev = {
+      id: item.id,
+      title: item.title,
+      start: item.due_time ? item.due + 'T' + item.due_time : item.due,
+      allDay: !item.due_time,
+      backgroundColor: sty.bg,
+      borderColor: sty.color,
+      textColor: sty.color,
+      extendedProps: { _type: 'board', status: item.status || 'todo', desc: item.desc || '' },
+    };
+    events.push(ev);
   });
-  renderCalendar();
+  (schedules || []).forEach(s => {
+    if (s.deleted || !s.enabled || !s.next_run) return;
+    events.push({
+      id: 'sched-' + s.id,
+      title: s.title,
+      start: s.next_run,
+      allDay: !s.next_run.includes('T'),
+      backgroundColor: 'rgba(163,113,247,0.15)',
+      borderColor: '#a855f7',
+      textColor: '#c084fc',
+      extendedProps: { _type: 'schedule', schedId: s.id },
+    });
+  });
+  return events;
 }
-function calSelectDay(y, m, d) {
-  calYear = y; calMonth = m; calDay = d;
-  calSetView('day');
+
+function _fcInit() {
+  const el = document.getElementById('fc-container');
+  if (!el || !window.FullCalendar) return;
+  if (_fcInstance) { _fcInstance.destroy(); _fcInstance = null; }
+  // Map old view names to FullCalendar view names
+  let savedView = localStorage.getItem('amux_cal_view') || 'dayGridMonth';
+  const _viewMap = { month: 'dayGridMonth', week: 'timeGridWeek', day: 'timeGridDay' };
+  if (_viewMap[savedView]) savedView = _viewMap[savedView];
+  if (!['dayGridMonth','timeGridWeek','timeGridDay'].includes(savedView)) savedView = 'dayGridMonth';
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark' || (!document.body.classList.contains('light'));
+  _fcInstance = new FullCalendar.Calendar(el, {
+    initialView: savedView,
+    headerToolbar: {
+      left: 'prev,today,next',
+      center: 'title',
+      right: 'dayGridMonth,timeGridWeek,timeGridDay subscribe',
+    },
+    customButtons: {
+      subscribe: {
+        text: 'Subscribe',
+        click: showIcalInfo,
+      },
+    },
+    events: function(info, successCallback) { successCallback(_fcGetEvents()); },
+    height: window.innerHeight - el.getBoundingClientRect().top - 16,
+    nowIndicator: true,
+    navLinks: true,
+    editable: false,
+    selectable: true,
+    selectMirror: true,
+    dayMaxEvents: true,
+    weekNumbers: false,
+    firstDay: 0,
+    slotMinTime: '06:00:00',
+    slotMaxTime: '22:00:00',
+    expandRows: true,
+    stickyHeaderDates: true,
+    eventClick: function(info) {
+      const props = info.event.extendedProps;
+      if (props._type === 'schedule') {
+        openSchedModal(props.schedId);
+      } else {
+        openBoardDetail(info.event.id);
+      }
+    },
+    dateClick: function(info) {
+      openBoardAdd(info.dateStr);
+    },
+    select: function(info) {
+      openBoardAdd(info.startStr.slice(0, 10));
+    },
+    viewDidMount: function(info) {
+      localStorage.setItem('amux_cal_view', info.view.type);
+    },
+    eventDidMount: function(info) {
+      // Tooltip with description
+      const desc = info.event.extendedProps.desc;
+      if (desc) info.el.title = desc;
+    },
+  });
+  _fcInstance.render();
+  // updateSize after layout settles (container was display:none → flex)
+  setTimeout(() => { if (_fcInstance) _fcInstance.updateSize(); }, 50);
+  // Resize handler
+  if (!window._fcResizeHandler) {
+    window._fcResizeHandler = () => { if (_fcInstance && activeView === 'calendar') { const c = document.getElementById('fc-container'); if (c) _fcInstance.setOption('height', window.innerHeight - c.getBoundingClientRect().top - 16); } };
+    window.addEventListener('resize', window._fcResizeHandler);
+  }
+}
+
+function renderCalendar() {
+  if (_fcInstance) {
+    _fcInstance.refetchEvents();
+  } else {
+    _fcInit();
+  }
 }
 
 function showIcalInfo() {
@@ -18252,250 +18626,34 @@ function showIcalInfo() {
   const origin = window.location.origin;
   const localUrl = origin + '/api/calendar.ics';
   const isLocal = origin.includes('localhost') || origin.includes('127.0.0.1');
-  // Prefer S3 URL for subscriptions (publicly reachable); fall back to local
   const subUrl = s3Url || localUrl;
-  const googleUrl = 'https://calendar.google.com/calendar/r/settings/addbyurl?' +
-    'url=' + encodeURIComponent(subUrl);
-  const appleUrl = s3Url ? ('webcal://' + s3Url.replace(/^https?:\/\//, '')) :
-    ('webcal://' + window.location.host + '/api/calendar.ics');
-
-  function ical_url_esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
-
+  const googleUrl = 'https://calendar.google.com/calendar/r/settings/addbyurl?url=' + encodeURIComponent(subUrl);
+  const appleUrl = s3Url ? ('webcal://' + s3Url.replace(/^https?:\/\//, '')) : ('webcal://' + window.location.host + '/api/calendar.ics');
+  function esc_url(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
   let html = '<div style="font-size:0.9rem;line-height:1.7;">';
   html += '<p style="margin-bottom:0.8rem;font-weight:600;">Subscribe to amux calendar</p>';
-
   if (s3Url) {
     html += '<p style="margin-bottom:0.6rem;font-size:0.82rem;">Subscription URL (public S3):</p>';
-    html += '<code style="display:block;background:var(--card-bg);padding:0.5rem 0.8rem;border-radius:6px;font-size:0.78rem;margin-bottom:1rem;word-break:break-all;">' + ical_url_esc(s3Url) + '</code>';
-    html += '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;">';
-    html += '<a href="' + googleUrl + '" target="_blank" class="btn" style="font-size:0.8rem;">Add to Google Calendar</a>';
-    html += '<a href="' + appleUrl + '" class="btn" style="font-size:0.8rem;">Add to Apple Calendar</a>';
-    html += '</div>';
+    html += '<code style="display:block;background:var(--card-bg);padding:0.5rem 0.8rem;border-radius:6px;font-size:0.78rem;margin-bottom:1rem;word-break:break-all;">' + esc_url(s3Url) + '</code>';
   } else if (isLocal) {
-    html += '<p style="margin-bottom:0.8rem;color:var(--muted);font-size:0.82rem;">⚠️ You\'re on localhost — Google and Apple Calendar can\'t reach this URL directly.</p>';
-    html += '<p style="margin-bottom:0.8rem;font-size:0.82rem;">Set <code>AMUX_S3_BUCKET</code> to enable a publicly reachable subscription URL via S3.</p>';
+    html += '<p style="margin-bottom:0.8rem;color:var(--muted);font-size:0.82rem;">Set <code>AMUX_S3_BUCKET</code> for a publicly reachable subscription URL.</p>';
   } else {
-    html += '<p style="margin-bottom:0.6rem;font-size:0.82rem;">Feed URL:</p>';
-    html += '<code style="display:block;background:var(--card-bg);padding:0.5rem 0.8rem;border-radius:6px;font-size:0.78rem;margin-bottom:1rem;word-break:break-all;">' + ical_url_esc(localUrl) + '</code>';
-    html += '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;">';
-    html += '<a href="' + googleUrl + '" target="_blank" class="btn" style="font-size:0.8rem;">Add to Google Calendar</a>';
-    html += '<a href="' + appleUrl + '" class="btn" style="font-size:0.8rem;">Add to Apple Calendar</a>';
-    html += '</div>';
+    html += '<code style="display:block;background:var(--card-bg);padding:0.5rem 0.8rem;border-radius:6px;font-size:0.78rem;margin-bottom:1rem;word-break:break-all;">' + esc_url(localUrl) + '</code>';
   }
-
-  // Always offer direct download
-  html += '<hr style="margin:0.9rem 0;border:none;border-top:1px solid var(--border);">';
-  html += '<a href="/api/calendar.ics" download="amux.ics" class="btn" style="font-size:0.8rem;">&#x2193; Download .ics file</a>';
-  html += '</div>';
-
-  // Reuse the board-edit overlay for a simple modal
-  const overlay = document.getElementById('board-edit-overlay');
-  const inner = overlay.querySelector('.board-edit-inner') || overlay;
-  // Create a temporary modal instead
+  html += '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.8rem;">';
+  html += '<a href="' + googleUrl + '" target="_blank" class="btn" style="font-size:0.8rem;">Add to Google Calendar</a>';
+  html += '<a href="' + appleUrl + '" class="btn" style="font-size:0.8rem;">Add to Apple Calendar</a>';
+  html += '<a href="/api/calendar.ics" download="amux.ics" class="btn" style="font-size:0.8rem;">Download .ics</a>';
+  html += '</div></div>';
   const modal = document.createElement('div');
   modal.style.cssText = 'position:fixed;inset:0;z-index:2000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.55);';
   const box = document.createElement('div');
   box.style.cssText = 'background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:1.4rem;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.4);';
-  box.innerHTML = html + '<button onclick="this.closest(\'[data-ical-modal]\').remove()" class="btn" style="margin-top:0.8rem;font-size:0.8rem;">Close</button>';
+  box.innerHTML = html + '<button onclick="this.closest(\'[data-ical-modal]\').remove()" class="btn" style="margin-top:0.4rem;font-size:0.8rem;">Close</button>';
   modal.setAttribute('data-ical-modal', '1');
   modal.appendChild(box);
   modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
   document.body.appendChild(modal);
-}
-
-const _CAL_MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-const _CAL_DAYS_LONG = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-const _CAL_DAYS_SHORT = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-const _CAL_DAYS_MIN = ['S','M','T','W','T','F','S'];
-
-function _calDateStr(y, m, d) {
-  return y + '-' + String(m+1).padStart(2,'0') + '-' + String(d).padStart(2,'0');
-}
-function _calTodayStr() {
-  const t = new Date();
-  return _calDateStr(t.getFullYear(), t.getMonth(), t.getDate());
-}
-function _calItemsByDate() {
-  const map = {};
-  (boardItems || []).forEach(item => {
-    if (item.due && !item.deleted) {
-      if (!map[item.due]) map[item.due] = [];
-      map[item.due].push(item);
-    }
-  });
-  (schedules || []).forEach(s => {
-    if (!s.deleted && s.enabled && s.next_run) {
-      const dateStr = s.next_run.slice(0, 10);
-      if (!map[dateStr]) map[dateStr] = [];
-      const time = s.next_run.slice(11, 16);
-      map[dateStr].push({ ...s, _isSched: true, due: dateStr,
-        title: '⏰ ' + s.title + (time ? ' ' + time : ''),
-        status: 'sched' });
-    }
-  });
-  return map;
-}
-
-function renderCalendar() {
-  const titleEl = document.getElementById('cal-title');
-  const bodyEl = document.getElementById('cal-body');
-  if (!titleEl || !bodyEl) return;
-  // Sync active tab button state
-  ['month','week','day'].forEach(m => {
-    const el = document.getElementById('cal-tab-' + m);
-    if (el) el.classList.toggle('active', m === calViewMode);
-  });
-  if (calViewMode === 'week') { _renderCalWeek(titleEl, bodyEl); return; }
-  if (calViewMode === 'day')  { _renderCalDay(titleEl, bodyEl); return; }
-  _renderCalMonth(titleEl, bodyEl);
-}
-
-function _renderCalMonth(titleEl, bodyEl) {
-  const isMob = window.innerWidth <= 480;
-  const dayNames = isMob ? _CAL_DAYS_MIN : _CAL_DAYS_SHORT;
-  titleEl.textContent = _CAL_MONTHS[calMonth] + ' ' + calYear;
-  const todayStr = _calTodayStr();
-  const firstDay = new Date(calYear, calMonth, 1).getDay();
-  const daysInMonth = new Date(calYear, calMonth+1, 0).getDate();
-  const daysInPrevMonth = new Date(calYear, calMonth, 0).getDate();
-  const itemsByDate = _calItemsByDate();
-  let html = '<div id="cal-grid" class="cal-grid">';
-  dayNames.forEach(d => { html += '<div class="cal-day-header">' + d + '</div>'; });
-  const totalCells = Math.ceil((firstDay + daysInMonth) / 7) * 7;
-  for (let i = 0; i < totalCells; i++) {
-    let day, dateStr, isOther = false, cellY = calYear, cellM = calMonth;
-    if (i < firstDay) {
-      day = daysInPrevMonth - firstDay + i + 1;
-      cellM = calMonth === 0 ? 11 : calMonth - 1;
-      cellY = calMonth === 0 ? calYear - 1 : calYear;
-      isOther = true;
-    } else if (i >= firstDay + daysInMonth) {
-      day = i - firstDay - daysInMonth + 1;
-      cellM = calMonth === 11 ? 0 : calMonth + 1;
-      cellY = calMonth === 11 ? calYear + 1 : calYear;
-      isOther = true;
-    } else {
-      day = i - firstDay + 1; cellY = calYear; cellM = calMonth;
-    }
-    dateStr = _calDateStr(cellY, cellM, day);
-    const isToday = dateStr === todayStr;
-    const items = itemsByDate[dateStr] || [];
-    html += '<div class="cal-cell' + (isOther ? ' other-month' : '') + (isToday ? ' today' : '') + '"'
-          + ' onclick="openBoardAdd(\'' + dateStr + '\')">';
-    html += '<div class="cal-cell-num">' + day + '</div>';
-    if (isMob) {
-      if (items.length) {
-        html += '<div class="cal-dots">';
-        items.slice(0, 7).forEach(item => {
-          const sty = statusStyle(item.status || 'todo');
-          html += '<div class="cal-dot" style="background:' + sty.color + '" title="' + esc(item.title) + '"></div>';
-        });
-        html += '</div>';
-      }
-    } else {
-      items.slice(0, 3).forEach(item => {
-        if (item._isSched) {
-          html += '<div class="cal-chip sched-chip"'
-                + ' onclick="event.stopPropagation();openSchedModal(\'' + item.id + '\')"'
-                + ' title="' + esc(item.title) + '">' + esc(item.title) + '</div>';
-        } else {
-          const sty = statusStyle(item.status || 'todo');
-          html += '<div class="cal-chip" style="background:' + sty.bg + ';color:' + sty.color + '"'
-                + ' onclick="event.stopPropagation();openBoardDetail(\'' + item.id + '\')"'
-                + ' title="' + esc(item.title) + '">' + esc(item.title) + '</div>';
-        }
-      });
-      if (items.length > 3) html += '<div class="cal-more">+' + (items.length - 3) + ' more</div>';
-    }
-    html += '</div>';
-  }
-  html += '</div>';
-  bodyEl.innerHTML = html;
-}
-
-function _renderCalWeek(titleEl, bodyEl) {
-  const isMob = window.innerWidth <= 480;
-  // Find Sunday of current week
-  const anchor = new Date(calYear, calMonth, calDay);
-  const weekStart = new Date(anchor);
-  weekStart.setDate(anchor.getDate() - anchor.getDay());
-  const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 6);
-  const fmtDay = d => _CAL_MONTHS[d.getMonth()].slice(0,3) + ' ' + d.getDate();
-  titleEl.textContent = fmtDay(weekStart) + ' – ' + fmtDay(weekEnd) + ', ' + weekEnd.getFullYear();
-  const todayStr = _calTodayStr();
-  const itemsByDate = _calItemsByDate();
-  const dayNames = isMob ? _CAL_DAYS_MIN : _CAL_DAYS_SHORT;
-  let html = '<div class="cal-week-grid">';
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(weekStart); d.setDate(weekStart.getDate() + i);
-    const dayLabel = dayNames[d.getDay()] + (isMob ? '' : ' ' + d.getDate());
-    html += '<div class="cal-week-header">' + dayLabel + '</div>';
-  }
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(weekStart); d.setDate(weekStart.getDate() + i);
-    const ds = _calDateStr(d.getFullYear(), d.getMonth(), d.getDate());
-    const isToday = ds === todayStr;
-    const items = itemsByDate[ds] || [];
-    html += '<div class="cal-week-cell' + (isToday ? ' today' : '') + '"'
-          + ' onclick="openBoardAdd(\'' + ds + '\')">';
-    html += '<div class="cal-week-num">' + d.getDate() + '</div>';
-    items.slice(0, 4).forEach(item => {
-      if (item._isSched) {
-        html += '<div class="cal-week-chip sched-chip"'
-              + ' onclick="event.stopPropagation();openSchedModal(\'' + item.id + '\')"'
-              + ' title="' + esc(item.title) + '">' + esc(item.title) + '</div>';
-        html += '<div class="cal-week-dot" style="background:#c084fc"></div>';
-      } else {
-        const sty = statusStyle(item.status || 'todo');
-        html += '<div class="cal-week-chip" style="background:' + sty.bg + ';color:' + sty.color + '"'
-              + ' onclick="event.stopPropagation();openBoardDetail(\'' + item.id + '\')"'
-              + ' title="' + esc(item.title) + '">' + esc(item.title) + '</div>';
-        html += '<div class="cal-week-dot" style="background:' + sty.color + '"></div>';
-      }
-    });
-    if (items.length > 4) html += '<div class="cal-week-more">+' + (items.length - 4) + '</div>';
-    html += '</div>';
-  }
-  html += '</div>';
-  bodyEl.innerHTML = html;
-}
-
-function _renderCalDay(titleEl, bodyEl) {
-  const d = new Date(calYear, calMonth, calDay);
-  const dayName = _CAL_DAYS_LONG[d.getDay()];
-  titleEl.textContent = dayName + ', ' + _CAL_MONTHS[calMonth].slice(0,3) + ' ' + calDay + ' ' + calYear;
-  const ds = _calDateStr(calYear, calMonth, calDay);
-  const items = (_calItemsByDate()[ds] || []);
-  let html = '<div class="cal-day-view">';
-  if (!items.length) {
-    html += '<div class="cal-day-empty">No issues due on this day</div>';
-  } else {
-    items.forEach(item => {
-      if (item._isSched) {
-        html += '<div class="cal-day-issue" onclick="openSchedModal(\'' + item.id + '\')">';
-        html += '<span class="cal-dot" style="background:#c084fc;width:8px;height:8px;flex-shrink:0;border-radius:50%;margin-top:5px;"></span>';
-        html += '<div class="cal-day-issue-text">';
-        html += '<div class="cal-day-issue-title">' + esc(item.title) + '</div>';
-        if (item.desc) html += '<div class="cal-day-issue-desc">' + esc(item.desc) + '</div>';
-        html += '</div>';
-        html += '<span style="font-size:0.7rem;padding:2px 7px;border-radius:10px;background:rgba(163,113,247,0.18);color:#c084fc;flex-shrink:0;">schedule</span>';
-        html += '</div>';
-      } else {
-        const sty = statusStyle(item.status || 'todo');
-        html += '<div class="cal-day-issue" onclick="openBoardDetail(\'' + item.id + '\')">';
-        html += '<span class="cal-dot" style="background:' + sty.color + ';width:8px;height:8px;flex-shrink:0;border-radius:50%;margin-top:5px;"></span>';
-        html += '<div class="cal-day-issue-text">';
-        html += '<div class="cal-day-issue-title">' + esc(item.title) + '</div>';
-        if (item.desc) html += '<div class="cal-day-issue-desc">' + esc(item.desc) + '</div>';
-        html += '</div>';
-        html += '<span style="font-size:0.7rem;padding:2px 7px;border-radius:10px;background:' + sty.bg + ';color:' + sty.color + ';flex-shrink:0;">' + esc(item.status || 'todo') + '</span>';
-        html += '</div>';
-      }
-    });
-  }
-  html += '<button class="cal-day-add" onclick="openBoardAdd(\'' + ds + '\')">+ Add issue for this day</button>';
-  html += '</div>';
-  bodyEl.innerHTML = html;
 }
 
 // ═══════ GRID MODE ═══════
@@ -18520,7 +18678,7 @@ function enterGridMode() {
   }
   view.classList.add('active');
   // Mark Grid tab as active, deactivate others
-  ['sessions','board','scheduler','files','logs','email','notes','crm'].forEach(t => document.getElementById('tab-' + t)?.classList.remove('active'));
+  ['sessions','board','calendar','scheduler','files','logs','email','notes','crm'].forEach(t => document.getElementById('tab-' + t)?.classList.remove('active'));
   document.getElementById('tab-grid').classList.add('active');
   _renderGridChips();
   _wsRenderProfileBar();
@@ -21972,6 +22130,22 @@ function _notesFolderInputKey(e) {
   else if (e.key === 'Escape') { e.preventDefault(); _notesFolderCancel(); }
 }
 
+// ── Notes keyboard shortcuts ──
+document.addEventListener('keydown', e => {
+  if (activeView !== 'notes') return;
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && e.key === 'n' && !e.shiftKey) { e.preventDefault(); _notesNew(); }
+  if (mod && e.key === 's') { e.preventDefault(); if (_notesSaveTimer) { clearTimeout(_notesSaveTimer); _notesSaveTimer = null; } _notesSave(); }
+  if (mod && e.key === 'p') { e.preventDefault(); _notesQuickOpen(); }
+});
+
+function _notesQuickOpen() {
+  const q = prompt('Open note:');
+  if (!q) return;
+  const match = _notesAllNotes.find(n => n.name.toLowerCase().includes(q.toLowerCase()) || n.path.toLowerCase().includes(q.toLowerCase()));
+  if (match) _notesOpen(match.path);
+}
+
 // ── Notes drag-and-drop ──
 let _notesDraggingPath = null;
 
@@ -22151,7 +22325,7 @@ async function _notesOpen(path) {
   document.querySelectorAll('#notes-list .notes-list-item').forEach(el => {
     el.classList.toggle('active', el.dataset.path === path);
   });
-  if (_quill) { _quill.setText(''); _quill.root.style.opacity = '0.3'; }
+  if (_quill) { _quill.setText(''); }
   document.getElementById('notes-save-status').textContent = '';
 
   let data;
@@ -22183,10 +22357,8 @@ async function _notesOpen(path) {
   // Keep sidebar list name in sync with derived title
   const listEntry = _notesAllNotes.find(n => n.path === data.path);
   if (listEntry) listEntry.name = _notesActive.title;
-  // Load into Quill with a brief fade for smoothness
+  // Load into Quill instantly (no fade)
   if (!_quill) _notesInitQuill();
-  const quillRoot = _quill.root;
-  quillRoot.style.opacity = '0';
   const isHtml = /<[a-z][\s\S]*>/i.test(data.content);
   _notesLoadingContent = true;
   if (isHtml) {
@@ -22197,7 +22369,6 @@ async function _notesOpen(path) {
   setTimeout(() => { _notesLoadingContent = false; }, 0);
   document.getElementById('notes-empty-state').style.display = 'none';
   document.getElementById('notes-mode-tabs').style.display = 'flex';
-  // Always show edit mode when switching notes
   _notesMode = 'edit';
   document.getElementById('notes-tab-edit').classList.add('active');
   document.getElementById('notes-tab-preview').classList.remove('active');
@@ -22205,7 +22376,6 @@ async function _notesOpen(path) {
   const previewEl = document.getElementById('notes-preview');
   previewEl.innerHTML = '';
   previewEl.classList.remove('active');
-  quillRoot.style.opacity = '1';
   _notesSidebarUpdateActive(path);
   _notesUpdatePinBtn();
   document.getElementById('notes-save-status').textContent = '';
@@ -22273,7 +22443,7 @@ function _notesTitleChange() {
 
 function _notesSaveDebounce() {
   if (_notesSaveTimer) clearTimeout(_notesSaveTimer);
-  _notesSaveTimer = setTimeout(_notesSave, 800);
+  _notesSaveTimer = setTimeout(_notesSave, 400);
 }
 
 async function _notesSave() {
@@ -22315,7 +22485,7 @@ const _TRASH_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="1
 function _notesTTS() {
   if (!_notesActive) return;
   // Get plain text from the Quill editor
-  const editor = _notesQuill;
+  const editor = _quill;
   const text = editor ? editor.getText().trim() : '';
   if (!text) { showToast('Note is empty', 'error'); return; }
   openTTS(text);
@@ -23790,6 +23960,122 @@ function _graphRestorePositions() {
   } catch(e) {}
 }
 
+// ── Browser ─────────────────────────────────────────────────────────────────
+let _bwInited = false;
+let _bwSession = 'amux';
+
+async function _bwInit() {
+  if (_bwInited) return;
+  _bwInited = true;
+  // Load profiles
+  try {
+    const r = await fetch('/api/browser/profiles');
+    const d = await r.json();
+    const sel = document.getElementById('bw-profile');
+    (d.profiles || []).forEach(p => {
+      const o = document.createElement('option');
+      o.value = p; o.textContent = p;
+      sel.appendChild(o);
+    });
+    // Also add Playwright auth profiles
+    const pw = await fetch('/api/browser/pw-profiles').catch(() => null);
+    if (pw && pw.ok) {
+      const pd = await pw.json();
+      (pd.profiles || []).forEach(p => {
+        const o = document.createElement('option');
+        o.value = 'pw:' + p; o.textContent = '🔐 ' + p;
+        sel.appendChild(o);
+      });
+    }
+  } catch(e) {}
+}
+
+function _bwStatus(msg) {
+  const el = document.getElementById('bw-status');
+  if (el) el.textContent = msg;
+}
+
+async function _bwGo() {
+  const url = document.getElementById('bw-url').value.trim();
+  if (!url) return;
+  const profile = document.getElementById('bw-profile').value;
+  _bwStatus('Loading...');
+  try {
+    const body = { url, session: _bwSession };
+    if (profile && !profile.startsWith('pw:')) body.profile = profile;
+    else if (profile && profile.startsWith('pw:')) body.profile = profile.slice(3);
+    const r = await fetch('/api/browser/start', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (d.success === false && d.error) { _bwStatus('Error: ' + d.error); return; }
+    _bwStatus('Navigated');
+    // Auto-screenshot after a delay
+    setTimeout(() => _bwScreenshot(), 2000);
+  } catch(e) { _bwStatus('Error: ' + e.message); }
+}
+
+async function _bwScreenshot() {
+  _bwStatus('Taking screenshot...');
+  try {
+    const r = await fetch('/api/browser/screenshot?session=' + _bwSession + '&t=' + Date.now());
+    const d = await r.json();
+    if (d.path) {
+      // Load via file raw API
+      const img = document.getElementById('bw-img');
+      img.src = '/api/file/raw?path=' + encodeURIComponent(d.path) + '&t=' + Date.now();
+      img.style.display = '';
+      document.getElementById('bw-placeholder').style.display = 'none';
+      _bwStatus('Screenshot taken');
+    } else {
+      _bwStatus(d.error || 'Screenshot failed');
+    }
+  } catch(e) { _bwStatus('Error: ' + e.message); }
+}
+
+async function _bwClick(event) {
+  const img = document.getElementById('bw-img');
+  const rect = img.getBoundingClientRect();
+  // Scale click coords to actual viewport (1280x800 default)
+  const scaleX = 1280 / rect.width;
+  const scaleY = 800 / rect.height;
+  const x = Math.round((event.clientX - rect.left) * scaleX);
+  const y = Math.round((event.clientY - rect.top) * scaleY);
+  _bwStatus('Clicking ' + x + ',' + y + '...');
+  try {
+    await fetch('/api/browser/action', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ action: 'click', x, y, session: _bwSession }) });
+    setTimeout(() => _bwScreenshot(), 1000);
+  } catch(e) { _bwStatus('Error: ' + e.message); }
+}
+
+async function _bwBack() {
+  _bwStatus('Going back...');
+  try {
+    await fetch('/api/browser/action', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ action: 'back', session: _bwSession }) });
+    setTimeout(() => _bwScreenshot(), 1000);
+  } catch(e) { _bwStatus('Error: ' + e.message); }
+}
+
+async function _bwSaveProfile() {
+  const name = prompt('Profile name to save current session as:');
+  if (!name) return;
+  _bwStatus('Saving profile...');
+  try {
+    const r = await fetch('/api/browser/save-profile', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name, session: _bwSession }) });
+    const d = await r.json();
+    _bwStatus(d.success ? 'Profile saved: ' + name : (d.error || 'Save failed'));
+    if (d.success) {
+      // Add to dropdown if not there
+      const sel = document.getElementById('bw-profile');
+      const exists = Array.from(sel.options).some(o => o.value === 'pw:' + name);
+      if (!exists) {
+        const o = document.createElement('option');
+        o.value = 'pw:' + name; o.textContent = '🔐 ' + name;
+        sel.appendChild(o);
+        sel.value = 'pw:' + name;
+      }
+    }
+  } catch(e) { _bwStatus('Error: ' + e.message); }
+}
+
 // ── Journal ──────────────────────────────────────────────────────────────────
 let _jrnlEntries = [];
 let _jrnlAllEntries = [];
@@ -24272,6 +24558,7 @@ async function _jrnlSaveConfig() {
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js"></script>
 <div id="grid-view">
   <div class="grid-toolbar">
     <span class="grid-toolbar-title">Workspace</span>
@@ -25934,9 +26221,19 @@ class CCHandler(BaseHTTPRequestHandler):
                 return self._json({"error": "access denied"}, 403)
             WRITABLE_EXTS = {".md", ".markdown", ".mdx", ".txt", ".json",
                              ".yml", ".yaml", ".toml", ".ini", ".cfg",
-                             ".sh", ".py", ".js", ".ts", ".css", ".html", ".htm"}
-            if p.suffix.lower() not in WRITABLE_EXTS:
-                return self._json({"error": "file type not writable"}, 400)
+                             ".sh", ".bash", ".zsh", ".py", ".js", ".ts", ".jsx", ".tsx",
+                             ".mjs", ".cjs", ".css", ".scss", ".less", ".html", ".htm",
+                             ".xml", ".svg", ".csv", ".sql", ".graphql", ".proto",
+                             ".go", ".rs", ".java", ".rb", ".php", ".swift", ".kt",
+                             ".c", ".cpp", ".h", ".cs", ".r", ".lua", ".pl",
+                             ".env", ".gitignore", ".dockerignore",
+                             ".tf", ".hcl", ".conf", ".log", ".makefile"}
+            ext = p.suffix.lower()
+            # Allow extensionless files and common text extensions
+            if ext and ext not in WRITABLE_EXTS:
+                return self._json({"error": "file type not writable: " + ext}, 400)
+            # Create parent directories if they don't exist (for new files)
+            p.parent.mkdir(parents=True, exist_ok=True)
             try:
                 p.write_text(body.get("content", ""))
                 return self._json({"ok": True, "path": str(p)})
@@ -26069,6 +26366,7 @@ class CCHandler(BaseHTTPRequestHandler):
                 length = end - start + 1
                 self.send_response(206)
                 self.send_header("Content-Type", mime)
+                self.send_header("Content-Disposition", f'attachment; filename="{p.name}"')
                 self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
                 self.send_header("Content-Length", str(length))
                 self.send_header("Accept-Ranges", "bytes")
@@ -26087,6 +26385,7 @@ class CCHandler(BaseHTTPRequestHandler):
             else:
                 self.send_response(200)
                 self.send_header("Content-Type", mime)
+                self.send_header("Content-Disposition", f'attachment; filename="{p.name}"')
                 self.send_header("Content-Length", str(file_size))
                 self.send_header("Accept-Ranges", "bytes")
                 self.send_header("ETag", etag)
@@ -28305,6 +28604,34 @@ p{{color:#888;margin:12px 0 28px;font-size:0.9rem;line-height:1.5}}
                 except Exception as e:
                     return self._json({"error": str(e)}, 500)
 
+            # GET /api/browser/pw-profiles — list Playwright auth profiles
+            if method == "GET" and path == "/api/browser/pw-profiles":
+                pw_dir = Path.home() / ".amux" / "playwright-auth" / "profiles"
+                profiles = set()
+                if pw_dir.is_dir():
+                    profiles = {p.name for p in pw_dir.iterdir() if p.is_dir()}
+                # Also include default profile
+                default_dir = Path.home() / ".amux" / "playwright-auth" / "profile"
+                if default_dir.is_dir():
+                    profiles.add("default")
+                return self._json({"profiles": sorted(profiles)})
+
+            # POST /api/browser/save-profile  {"name":"...", "session":"..."}
+            if method == "POST" and path == "/api/browser/save-profile":
+                body = self._read_body()
+                name = body.get("name", "").strip()
+                if not name:
+                    return self._json({"error": "name required"}, 400)
+                session = body.get("session", "amux")
+                # Save current browser-use session cookies to a Playwright auth profile
+                dest = Path.home() / ".amux" / "playwright-auth" / "profiles" / name
+                dest.mkdir(parents=True, exist_ok=True)
+                try:
+                    result = _bu_call(["save-cookies", str(dest)], session=session, timeout_s=15)
+                    return self._json({"success": True, "profile": name, "path": str(dest)})
+                except Exception as e:
+                    return self._json({"error": str(e)}, 500)
+
             return self._json({"error": "browser route not found"}, 404)
 
         # ── Torrents (/api/torrents/*) ────────────────────────────────────────
@@ -28402,6 +28729,52 @@ p{{color:#888;margin:12px 0 28px;font-size:0.9rem;line-height:1.5}}
                 return self._json(stats)
             if action == "git":
                 wd = _session_work_dir(name)
+                if action_subid == "commits":
+                    count = int(qs.get("count", ["30"])[0])
+                    # Return commit log with hash, author, date, subject, body
+                    fmt = "%H%x00%an%x00%ai%x00%s%x00%b%x1E"
+                    rc = subprocess.run(
+                        ["git", "-C", wd, "log", f"-{count}", f"--format={fmt}"],
+                        capture_output=True, text=True, timeout=10, errors="replace",
+                    )
+                    commits = []
+                    if rc.returncode == 0:
+                        for entry in rc.stdout.split("\x1E"):
+                            entry = entry.strip()
+                            if not entry:
+                                continue
+                            parts = entry.split("\x00", 4)
+                            if len(parts) >= 4:
+                                commits.append({
+                                    "hash": parts[0], "author": parts[1],
+                                    "date": parts[2], "subject": parts[3],
+                                    "body": parts[4].strip() if len(parts) > 4 else "",
+                                })
+                    return self._json({"commits": commits})
+                if action_subid == "commit-detail":
+                    sha = qs.get("sha", [""])[0]
+                    if not sha:
+                        return self._json({"error": "sha required"}, 400)
+                    rd = subprocess.run(
+                        ["git", "-C", wd, "show", sha, "--stat", "--format=%H%n%an%n%ai%n%s%n%b%x00"],
+                        capture_output=True, text=True, timeout=10, errors="replace",
+                    )
+                    parts = rd.stdout.split("\x00", 1)
+                    meta = parts[0].split("\n", 4) if parts else []
+                    stat = parts[1].strip() if len(parts) > 1 else ""
+                    # Also get full diff
+                    rd2 = subprocess.run(
+                        ["git", "-C", wd, "show", sha, "--format="],
+                        capture_output=True, text=True, timeout=10, errors="replace",
+                    )
+                    return self._json({
+                        "hash": meta[0] if meta else sha,
+                        "author": meta[1] if len(meta) > 1 else "",
+                        "date": meta[2] if len(meta) > 2 else "",
+                        "subject": meta[3] if len(meta) > 3 else "",
+                        "body": meta[4].strip() if len(meta) > 4 else "",
+                        "stat": stat, "diff": rd2.stdout if rd2.returncode == 0 else "",
+                    })
                 if action_subid == "diff":
                     file_path = qs.get("file", [""])[0]
                     staged = qs.get("staged", ["0"])[0] == "1"
@@ -28882,6 +29255,9 @@ p{{color:#888;margin:12px 0 28px;font-size:0.9rem;line-height:1.5}}
     def do_PATCH(self):
         self._route("PATCH")
 
+    def do_PUT(self):
+        self._route("PUT")
+
     def do_DELETE(self):
         self._route("DELETE")
 
@@ -29305,6 +29681,18 @@ def main():
     lan_ip = get_lan_ip()
     no_tls = "--no-tls" in sys.argv
 
+    # Raise file descriptor limit — with 60+ sessions we need headroom for
+    # tmux subprocesses, log pipes, SSE connections, and SQLite
+    try:
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        target = min(hard, 10240)
+        if soft < target:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+            slog(f"[init] raised fd limit: {soft} → {target}")
+    except Exception:
+        pass
+
     # Kill any stale server process holding our port (e.g. zombie from Amux.app)
     _kill_stale_port(port)
 
@@ -29423,6 +29811,8 @@ def main():
     # Register all recurring jobs with the unified scheduler
     schedule_job(_yolo_loop,             interval=3,                    name="yolo",        initial_delay=3)
     schedule_job(_snapshot_loop,         interval=60,                   name="snapshot",    initial_delay=0)
+    schedule_job(_reap_stale_browsers,  interval=600,                  name="browser_reap", initial_delay=60)
+    schedule_job(_kill_stale_ray,        interval=600,                  name="ray_reap",     initial_delay=120)
     schedule_job(_refresh_token_cache,   interval=120,                  name="token_cache", initial_delay=5)
     schedule_job(_email_sync_job,        interval=_EMAIL_SYNC_INTERVAL, name="email_sync",  initial_delay=20)
     schedule_job(_cleanup_tmp,           interval=1800,                 name="tmp_cleanup", initial_delay=60)
