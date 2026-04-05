@@ -1962,6 +1962,15 @@ if not cs: print('No contacts yet')
 for c in cs: print(c.get('id',''),c.get('name',''),c.get('company',''))" ;;
       *) echo "amux crm: unknown subcommand: $sub" >&2; exit 1 ;;
     esac ;;
+  restart)
+    session="$1"
+    if [ -z "$session" ]; then echo "Usage: amux restart <session>" >&2; exit 1; fi
+    echo "Stopping $session..."
+    curl -sk -X POST "$AMUX_URL/api/sessions/$session/stop" >/dev/null
+    sleep 1
+    echo "Starting $session..."
+    curl -sk -X POST "$AMUX_URL/api/sessions/$session/start" >/dev/null
+    echo "Restarted $session" ;;
   session|sessions)
     curl -sk "$AMUX_URL/api/sessions" | python3 -c "
 import json,sys
@@ -1989,6 +1998,7 @@ for s in json.load(sys.stdin): print(s['name'], '(running)' if s.get('running') 
     echo "amux crm followups                      — show upcoming follow-ups"
     echo "amux crm list                           — list all contacts"
     echo "amux sessions                           — list sessions"
+    echo "amux restart <session>                  — stop and restart a session"
     echo "amux share <session> [perms]            — create a public share link (perms: output, output+files, output+files+notes)"
     echo "amux unshare <session> [token]          — revoke share link(s)" ;;
   *) echo "amux: unknown command: $cmd" >&2; exit 1 ;;
@@ -12977,7 +12987,8 @@ function stripAnsi(text) {
     .replace(/\x1b\][^\x07]*\x07/g, '')        // OSC sequences (BEL terminated)
     .replace(/\x1b\][^\x1b]*\x1b\\/g, '')      // OSC sequences (ST terminated)
     .replace(/\x1b[()][A-Z0-9]/g, '')          // Character set selection
-    .replace(/\x1b[\x20-\x2f]*[\x40-\x7e]/g, '');  // Other escape sequences
+    .replace(/\x1b[\x20-\x2f]*[\x40-\x7e]/g, '')   // Other escape sequences
+    .replace(/^─{10,}\n?/gm, '');   // Remove decorative separator lines (mobile readability)
 }
 
 function linkifyOutput(text) {
@@ -14217,7 +14228,7 @@ function slashAcKeydown(e) {
   const el = document.getElementById('slash-ac-list');
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendPeekCmd(); return; }
   if (!el.classList.contains('open')) {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendPeekCmd(); return; }
+    if (e.key === 'Enter' && !e.shiftKey && !matchMedia('(pointer: coarse)').matches) { e.preventDefault(); sendPeekCmd(); return; }
     if (e.key === 'ArrowUp' && inp.selectionStart === 0) { e.preventDefault(); cmdHistoryUp(inp); return; }
     if (e.key === 'ArrowDown' && _cmdHistoryIdx !== -1) { e.preventDefault(); cmdHistoryDown(inp); return; }
     return;
@@ -14357,7 +14368,7 @@ function cardSlashAcKeydown(name, e) {
   const el = document.getElementById('card-ac-' + name);
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendFromInput(name); return; }
   if (!el || !el.classList.contains('open')) {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendFromInput(name); return; }
+    if (e.key === 'Enter' && !e.shiftKey && !matchMedia('(pointer: coarse)').matches) { e.preventDefault(); sendFromInput(name); return; }
     if (e.key === 'ArrowUp' && inp && inp.selectionStart === 0) { e.preventDefault(); cmdHistoryUp(inp); return; }
     if (e.key === 'ArrowDown' && _cmdHistoryIdx !== -1) { e.preventDefault(); if (inp) cmdHistoryDown(inp); return; }
     return;
