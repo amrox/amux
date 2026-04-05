@@ -17734,7 +17734,7 @@ function renderScheduler() {
             <div style="font-weight:600;font-size:0.85rem;">${esc(s.title)}</div>
             <div style="font-size:0.72rem;color:var(--dim);margin-top:2px;">
               <span style="color:var(--accent);">${esc(s.session)}</span>
-              &nbsp;·&nbsp;<code style="font-size:0.7rem;background:var(--card);border:1px solid var(--border);border-radius:3px;padding:0 3px;">${esc(s.command)}</code>
+              &nbsp;·&nbsp;<code style="font-size:0.7rem;background:var(--card);border:1px solid var(--border);border-radius:3px;padding:0 3px;">${esc(s.command.length > 60 ? s.command.slice(0,60) + '…' : s.command)}</code>
             </div>
             <div style="font-size:0.7rem;color:var(--dim);margin-top:5px;display:flex;gap:10px;flex-wrap:wrap;">
               <span>🔁 ${esc(recLabel)}</span>
@@ -17744,14 +17744,14 @@ function renderScheduler() {
               ${s.watch ? `<span style="color:var(--accent);">👁 watching</span>` : ''}
               ${s.done_pattern ? `<span style="color:var(--dim);">stop: <code style="font-size:0.65rem;">${esc(s.done_pattern)}</code></span>` : ''}
             </div>
-          </div>
-          <div style="display:flex;gap:4px;flex-shrink:0;">
-            <button class="btn" style="font-size:0.7rem;padding:2px 8px;"
-              onclick="runScheduleNow('${esc(s.id)}')">Run Now</button>
-            <button class="btn" style="font-size:0.7rem;padding:2px 8px;"
-              onclick="openSchedModal('${esc(s.id)}')">Edit</button>
-            <button class="btn" style="font-size:0.7rem;padding:2px 8px;color:var(--red);"
-              onclick="deleteSchedule('${esc(s.id)}')">Delete</button>
+            <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+              <button class="btn" style="font-size:0.72rem;padding:4px 12px;"
+                onclick="runScheduleNow('${esc(s.id)}')">Run Now</button>
+              <button class="btn" style="font-size:0.72rem;padding:4px 12px;"
+                onclick="openSchedModal('${esc(s.id)}')">Edit</button>
+              <button class="btn" style="font-size:0.72rem;padding:4px 12px;color:var(--red);"
+                onclick="deleteSchedule('${esc(s.id)}')">Delete</button>
+            </div>
           </div>
         </div>
       </div>`;
