@@ -2745,14 +2745,39 @@ def _cron_next_run(parts: list, base) -> str | None:
     return None
 
 
+def _parse_time_str(s: str) -> tuple[int, int] | None:
+    """Parse flexible time strings: '18:00', '6pm', '6:30pm', '9am', '09:00'."""
+    import re as _re
+    # HH:MM am/pm
+    m = _re.match(r'^(\d{1,2}):(\d{2})\s*(am|pm)?$', s.strip().lower())
+    if m:
+        h, mi = int(m.group(1)), int(m.group(2))
+        if m.group(3) == 'pm' and h < 12: h += 12
+        elif m.group(3) == 'am' and h == 12: h = 0
+        return (h, mi)
+    # Ham/pm (no minutes)
+    m = _re.match(r'^(\d{1,2})\s*(am|pm)$', s.strip().lower())
+    if m:
+        h = int(m.group(1))
+        if m.group(2) == 'pm' and h < 12: h += 12
+        elif m.group(2) == 'am' and h == 12: h = 0
+        return (h, 0)
+    return None
+
+
 def _parse_next_run(expr: str, from_ts: float | None = None) -> str | None:
     """Parse a free-text schedule expression and return next ISO run time.
 
     Supported formats:
-      every Xm / Xh / Xd          — interval from now
-      daily at HH:MM               — delegates to _next_run_dt
-      weekly on <dayname> at HH:MM — delegates to _next_run_dt
-      MIN HOUR DOM MON DOW         — 5-field cron
+      every Xm / Xh / Xd               — interval from now
+      in Xm / Xh                        — one-shot relative
+      daily at HH:MM / 6pm              — daily recurring
+      every morning / every evening      — aliases for 9am / 18:00
+      every weekday at HH:MM            — Mon-Fri cron
+      every <dayname> at HH:MM          — weekly shorthand
+      weekly on <dayname> at HH:MM      — weekly recurring
+      monthly on <N> at HH:MM           — monthly recurring
+      MIN HOUR DOM MON DOW              — 5-field cron
     """
     import re as _re
     from datetime import datetime, timedelta
@@ -2762,6 +2787,16 @@ def _parse_next_run(expr: str, from_ts: float | None = None) -> str | None:
     base = datetime.fromtimestamp(from_ts) if from_ts else datetime.now()
     s = expr.strip().lower()
 
+    _DAY_MAP = {'monday':0,'tuesday':1,'wednesday':2,'thursday':3,'friday':4,'saturday':5,'sunday':6,
+                'mon':0,'tue':1,'wed':2,'thu':3,'fri':4,'sat':5,'sun':6}
+
+    # "in Xm/h" — one-shot relative
+    m = _re.match(r'^in\s+(\d+)\s*(m|min|minutes?|h|hr|hours?)$', s)
+    if m:
+        n, unit = int(m.group(1)), m.group(2)[0]
+        delta = {'m': timedelta(minutes=n), 'h': timedelta(hours=n)}[unit]
+        return (base + delta).strftime("%Y-%m-%dT%H:%M")
+
     # every Xm/h/d
     m = _re.match(r'^every\s+(\d+)\s*(m|min|minutes?|h|hr|hours?|d|days?)$', s)
     if m:
@@ -2769,21 +2804,56 @@ def _parse_next_run(expr: str, from_ts: float | None = None) -> str | None:
         delta = {'m': timedelta(minutes=n), 'h': timedelta(hours=n), 'd': timedelta(days=n)}[unit]
         return (base + delta).strftime("%Y-%m-%dT%H:%M")
 
-    # daily at HH:MM
-    m = _re.match(r'^daily\s+at\s+(\d{1,2}):(\d{2})$', s)
+    # "every morning" / "every evening" / "every night"
+    m = _re.match(r'^every\s+(morning|evening|night)$', s)
     if m:
+        h = 9 if m.group(1) == 'morning' else 18
         return _next_run_dt({"sched_type": "recurring", "recurrence": "daily",
-                              "run_at": f"{int(m.group(1)):02d}:{m.group(2)}"})
+                              "run_at": f"{h:02d}:00"})
 
-    # weekly on <day> at HH:MM
-    _DAY_MAP = {'monday':0,'tuesday':1,'wednesday':2,'thursday':3,'friday':4,'saturday':5,'sunday':6,
-                'mon':0,'tue':1,'wed':2,'thu':3,'fri':4,'sat':5,'sun':6}
-    m = _re.match(r'^weekly\s+on\s+(\w+)\s+at\s+(\d{1,2}):(\d{2})$', s)
+    # "every weekday at TIME" — Mon-Fri cron
+    m = _re.match(r'^every\s+weekday\s+at\s+(.+)$', s)
+    if m:
+        t = _parse_time_str(m.group(1))
+        if t:
+            return _cron_next_run([str(t[1]), str(t[0]), '*', '*', '1-5'], base)
+
+    # "every <dayname> at TIME" — weekly shorthand
+    m = _re.match(r'^every\s+(\w+)\s+at\s+(.+)$', s)
     if m:
         day_num = _DAY_MAP.get(m.group(1))
         if day_num is not None:
-            return _next_run_dt({"sched_type": "recurring", "recurrence": "weekly",
-                                  "run_at": f"{day_num}:{int(m.group(2)):02d}:{m.group(3)}"})
+            t = _parse_time_str(m.group(2))
+            if t:
+                return _next_run_dt({"sched_type": "recurring", "recurrence": "weekly",
+                                      "run_at": f"{day_num}:{t[0]:02d}:{t[1]:02d}"})
+
+    # daily at TIME (flexible: "daily at 18:00", "daily at 6pm")
+    m = _re.match(r'^daily\s+at\s+(.+)$', s)
+    if m:
+        t = _parse_time_str(m.group(1))
+        if t:
+            return _next_run_dt({"sched_type": "recurring", "recurrence": "daily",
+                                  "run_at": f"{t[0]:02d}:{t[1]:02d}"})
+
+    # weekly on <day> at TIME
+    m = _re.match(r'^weekly\s+on\s+(\w+)\s+at\s+(.+)$', s)
+    if m:
+        day_num = _DAY_MAP.get(m.group(1))
+        if day_num is not None:
+            t = _parse_time_str(m.group(2))
+            if t:
+                return _next_run_dt({"sched_type": "recurring", "recurrence": "weekly",
+                                      "run_at": f"{day_num}:{t[0]:02d}:{t[1]:02d}"})
+
+    # monthly on <N> at TIME — "monthly on 15 at 9am"
+    m = _re.match(r'^monthly\s+on\s+(\d{1,2})\s+at\s+(.+)$', s)
+    if m:
+        mday = int(m.group(1))
+        t = _parse_time_str(m.group(2))
+        if t and 1 <= mday <= 28:
+            return _next_run_dt({"sched_type": "recurring", "recurrence": "monthly",
+                                  "run_at": f"{mday}:{t[0]:02d}:{t[1]:02d}"})
 
     # 5-field cron
     parts = expr.strip().split()
@@ -2891,7 +2961,7 @@ def _scheduler_loop():
     2. DB schedules table: user-configured tmux commands (cron-style, once, etc.)
     """
     from datetime import datetime
-    _DB_CHECK_INTERVAL = 30  # only hit SQLite every 30s for DB schedules
+    _DB_CHECK_INTERVAL = 10  # check SQLite every 10s for DB schedules
     _last_db_check = 0.0
     while True:
         time.sleep(1)
@@ -9140,11 +9210,15 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <label class="field-label">Schedule expression <span class="field-optional">(optional — overrides dropdowns below)</span></label>
         <input id="sched-expr" type="text" placeholder='e.g. "every 30m", "daily at 09:00", "0 9 * * 1-5"' autocomplete="off">
         <div style="font-size:0.65rem;color:var(--dim);margin-top:3px;display:flex;gap:6px;flex-wrap:wrap;">
-          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every 1h'" style="color:var(--accent);">every 1h</a>
           <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every 30m'" style="color:var(--accent);">every 30m</a>
-          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='daily at 09:00'" style="color:var(--accent);">daily at 09:00</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every 1h'" style="color:var(--accent);">every 1h</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every morning'" style="color:var(--accent);">every morning</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every evening'" style="color:var(--accent);">every evening</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='daily at 6pm'" style="color:var(--accent);">daily at 6pm</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='every weekday at 9am'" style="color:var(--accent);">every weekday at 9am</a>
           <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='weekly on monday at 08:00'" style="color:var(--accent);">weekly on monday</a>
-          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='0 9 * * 1-5'" style="color:var(--accent);">0 9 * * 1-5 (cron)</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='monthly on 1 at 9am'" style="color:var(--accent);">monthly on 1st</a>
+          <a href="#" onclick="event.preventDefault();document.getElementById('sched-expr').value='0 9 * * 1-5'" style="color:var(--accent);">cron: weekdays 9am</a>
         </div>
       </div>
       <div class="field-group">
@@ -12007,7 +12081,7 @@ async function _commitsLoad() {
   const list = document.getElementById('commits-list');
   list.innerHTML = '<div style="color:var(--dim);font-size:0.85rem;padding:20px 16px;">Loading commits…</div>';
   try {
-    const r = await fetch(API + '/api/sessions/' + encodeURIComponent(peekSession) + '/git/commits?count=40');
+    const r = await fetch(API + '/api/sessions/' + encodeURIComponent(peekSession) + '/git/commits?count=15');
     const d = await r.json();
     _commitsData = d.commits || [];
     _commitsRenderList();
@@ -17437,6 +17511,8 @@ function renderScheduler() {
           </div>
           <div style="display:flex;gap:4px;flex-shrink:0;">
             <button class="btn" style="font-size:0.7rem;padding:2px 8px;"
+              onclick="runScheduleNow('${esc(s.id)}')">Run Now</button>
+            <button class="btn" style="font-size:0.7rem;padding:2px 8px;"
               onclick="openSchedModal('${esc(s.id)}')">Edit</button>
             <button class="btn" style="font-size:0.7rem;padding:2px 8px;color:var(--red);"
               onclick="deleteSchedule('${esc(s.id)}')">Delete</button>
@@ -17460,6 +17536,16 @@ function renderScheduler() {
         ${r.note ? `<span style="color:var(--red);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(r.note)}">${esc(r.note)}</span>` : ''}
       </div>`;
     }).join('');
+  }
+}
+
+async function runScheduleNow(id) {
+  const r = await apiCall(API + '/api/schedules/' + id + '/run', {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}'
+  });
+  if (r) {
+    await Promise.all([fetchSchedules(), fetchSchedulerRuns()]);
+    renderScheduler();
   }
 }
 
@@ -26969,6 +27055,23 @@ class CCHandler(BaseHTTPRequestHandler):
                     (sid_for_runs,)
                 ).fetchall()
                 self._json([dict(r) for r in rows])
+                return
+
+            # POST /api/schedules/<id>/run — run now (manual trigger)
+            if method == "POST" and sched_id.endswith("/run"):
+                sid_for_run = sched_id[:-4]  # strip "/run"
+                db = get_db()
+                row = db.execute("SELECT * FROM schedules WHERE id=? AND deleted IS NULL", (sid_for_run,)).fetchone()
+                if not row:
+                    self._json({"error": "not found"}, 404); return
+                cols = _sched_cols(db)
+                sched = _sched_row_to_dict(row, cols)
+                _run_schedule(sched)
+                now_str = _dt.now().strftime("%Y-%m-%dT%H:%M")
+                db.execute("UPDATE schedules SET last_run=?, updated=? WHERE id=?",
+                           (now_str, int(_time.time()), sid_for_run))
+                db.commit()
+                self._json({"ok": True, "ran": sched["title"]})
                 return
 
             # GET /api/schedules/<id>
