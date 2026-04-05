@@ -2045,6 +2045,10 @@ def _init_db():
         "ALTER TABLE issues ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE schedules ADD COLUMN run_count INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE schedules ADD COLUMN schedule_expr TEXT",
+        "ALTER TABLE schedules ADD COLUMN watch INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE schedules ADD COLUMN watch_timeout INTEGER NOT NULL DEFAULT 120",
+        "ALTER TABLE schedules ADD COLUMN done_pattern TEXT",
+        "ALTER TABLE schedules ADD COLUMN done_action TEXT NOT NULL DEFAULT 'disable'",
         "ALTER TABLE graph_nodes ADD COLUMN source_path TEXT NOT NULL DEFAULT ''",
     ]:
         try:
@@ -2926,11 +2930,14 @@ def _next_run_dt(sched):
 
 
 def _run_schedule(sched):
-    """Execute a schedule entry — send message to tmux session and log the run."""
+    """Execute a schedule entry — send message to tmux session and log the run.
+    If watch=1, spawns a background thread to monitor the response."""
     session = sched["session"]
     command = sched.get("command") or ""
     slog(f"[sched] running '{sched['title']}' → session '{session}'")
     status, note = "ok", None
+    # Capture output before sending so we can detect new output later
+    pre_output = tmux_capture(session, 200) if sched.get("watch") else ""
     try:
         ok, err = send_text(session, command)
         if not ok:
@@ -2953,6 +2960,100 @@ def _run_schedule(sched):
     except Exception as log_err:
         slog(f"[sched] failed to log run: {log_err}")
     _push_alert("scheduler", session, f"Ran schedule: {sched['title']}")
+    # If watch mode is enabled, monitor response in background
+    if sched.get("watch") and status == "ok":
+        threading.Thread(
+            target=_watch_schedule_response,
+            args=(sched, pre_output),
+            daemon=True,
+            name=f"sched-watch-{sched['id']}"
+        ).start()
+
+
+def _watch_schedule_response(sched, pre_output: str):
+    """Monitor session output after a scheduled command. If done_pattern matches
+    new output, take done_action (disable, notify, or send a follow-up command)."""
+    import re as _re
+    session = sched["session"]
+    timeout = sched.get("watch_timeout") or 120
+    done_pattern = sched.get("done_pattern") or ""
+    done_action = sched.get("done_action") or "disable"
+    sched_id = sched["id"]
+
+    if not done_pattern:
+        return
+
+    slog(f"[sched-watch] watching '{sched['title']}' for pattern: {done_pattern}")
+    start = time.time()
+    poll_interval = 5  # check every 5s
+    matched = False
+
+    while time.time() - start < timeout:
+        time.sleep(poll_interval)
+        current_output = tmux_capture(session, 200)
+        # Extract only new output (after what was there before)
+        new_output = current_output
+        if pre_output:
+            # Find where old output ends in new output
+            overlap = pre_output[-200:] if len(pre_output) > 200 else pre_output
+            idx = current_output.find(overlap[-100:]) if len(overlap) >= 100 else -1
+            if idx >= 0:
+                new_output = current_output[idx + len(overlap[-100:]):]
+
+        try:
+            if _re.search(done_pattern, new_output, _re.IGNORECASE):
+                matched = True
+                slog(f"[sched-watch] pattern matched for '{sched['title']}': {done_pattern}")
+                break
+        except _re.error:
+            # Fallback to simple substring match if regex is invalid
+            if done_pattern.lower() in new_output.lower():
+                matched = True
+                slog(f"[sched-watch] substring matched for '{sched['title']}': {done_pattern}")
+                break
+
+    if not matched:
+        slog(f"[sched-watch] timeout ({timeout}s) for '{sched['title']}' — no match")
+        return
+
+    # Pattern matched — take action
+    try:
+        db = get_db()
+        now_ts = int(time.time())
+        if done_action == "disable":
+            db.execute("UPDATE schedules SET enabled=0, updated=? WHERE id=?", (now_ts, sched_id))
+            db.commit()
+            _push_alert("scheduler", session,
+                         f"Schedule '{sched['title']}' auto-disabled — done pattern matched")
+            slog(f"[sched-watch] disabled schedule '{sched['title']}'")
+            # Log the auto-disable as a run note
+            db.execute(
+                "INSERT INTO schedule_runs (schedule_id, ran_at, status, note) VALUES (?,?,?,?)",
+                (sched_id, now_ts, "done", f"Auto-disabled: matched '{done_pattern}'")
+            )
+            db.commit()
+        elif done_action == "notify":
+            _push_alert("scheduler", session,
+                         f"Schedule '{sched['title']}' — done pattern matched: {done_pattern}")
+            db.execute(
+                "INSERT INTO schedule_runs (schedule_id, ran_at, status, note) VALUES (?,?,?,?)",
+                (sched_id, now_ts, "done", f"Pattern matched (notify only): '{done_pattern}'")
+            )
+            db.commit()
+        elif done_action.startswith("command:"):
+            follow_up = done_action[8:]
+            send_text(session, follow_up)
+            db.execute("UPDATE schedules SET enabled=0, updated=? WHERE id=?", (now_ts, sched_id))
+            db.execute(
+                "INSERT INTO schedule_runs (schedule_id, ran_at, status, note) VALUES (?,?,?,?)",
+                (sched_id, now_ts, "done", f"Matched '{done_pattern}' → sent: {follow_up}")
+            )
+            db.commit()
+            _push_alert("scheduler", session,
+                         f"Schedule '{sched['title']}' — done, sent follow-up: {follow_up}")
+            slog(f"[sched-watch] sent follow-up for '{sched['title']}': {follow_up}")
+    except Exception as e:
+        slog(f"[sched-watch] error taking action for '{sched['title']}': {e}")
 
 
 def _scheduler_loop():
@@ -9245,6 +9346,30 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <div class="field-group" id="sched-monthday-field" style="display:none;">
         <label class="field-label">Day of month</label>
         <input id="sched-monthday" type="number" min="1" max="28" value="1" class="board-detail-session-select" style="width:100%;">
+      </div>
+    </div>
+    <div class="field-group" style="margin-top:8px;">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.8rem;font-weight:500;">
+        <input type="checkbox" id="sched-watch" style="width:auto;accent-color:var(--accent);" onchange="updateSchedWatchUI()">
+        Watch response
+      </label>
+      <div style="font-size:0.65rem;color:var(--dim);margin-top:2px;">After sending, monitor session output and take action when a pattern matches.</div>
+    </div>
+    <div id="sched-watch-fields" style="display:none;">
+      <div class="field-group">
+        <label class="field-label">Done pattern <span class="field-optional">(text or regex to match in response)</span></label>
+        <input id="sched-done-pattern" type="text" placeholder='e.g. "no more tasks", "all.*complete", "nothing to do"' autocomplete="off">
+      </div>
+      <div class="field-group">
+        <label class="field-label">When matched</label>
+        <select id="sched-done-action" class="board-detail-session-select" style="width:100%;">
+          <option value="disable">Stop schedule (disable)</option>
+          <option value="notify">Notify only (keep running)</option>
+        </select>
+      </div>
+      <div class="field-group">
+        <label class="field-label">Watch timeout <span class="field-optional">(seconds to wait for response)</span></label>
+        <input id="sched-watch-timeout" type="number" min="10" max="600" value="120" style="width:100px;">
       </div>
     </div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
@@ -17507,6 +17632,8 @@ function renderScheduler() {
               <span>▶ next: <strong style="color:var(--text);">${esc(nextRun)}</strong></span>
               <span>✓ last: ${esc(lastRun)}</span>
               <span>runs: <strong>${s.run_count || 0}</strong></span>
+              ${s.watch ? `<span style="color:var(--accent);">👁 watching</span>` : ''}
+              ${s.done_pattern ? `<span style="color:var(--dim);">stop: <code style="font-size:0.65rem;">${esc(s.done_pattern)}</code></span>` : ''}
             </div>
           </div>
           <div style="display:flex;gap:4px;flex-shrink:0;">
@@ -18144,6 +18271,10 @@ function updateSchedRecUI() {
   document.getElementById('sched-monthday-field').style.display = rec === 'monthly' ? '' : 'none';
   document.getElementById('sched-time-field').style.display = rec === 'hourly' ? 'none' : '';
 }
+function updateSchedWatchUI() {
+  document.getElementById('sched-watch-fields').style.display =
+    document.getElementById('sched-watch').checked ? '' : 'none';
+}
 function openSchedModal(editId) {
   _schedEditId = editId || null;
   const overlay = document.getElementById('sched-overlay');
@@ -18160,6 +18291,10 @@ function openSchedModal(editId) {
       document.getElementById('sched-run-at').value = s.run_at || '';
       document.getElementById('sched-expr').value = s.schedule_expr || '';
       if (s.recurrence) document.getElementById('sched-recurrence').value = s.recurrence;
+      document.getElementById('sched-watch').checked = !!s.watch;
+      document.getElementById('sched-done-pattern').value = s.done_pattern || '';
+      document.getElementById('sched-done-action').value = s.done_action || 'disable';
+      document.getElementById('sched-watch-timeout').value = s.watch_timeout || 120;
     }
     document.getElementById('sched-save-btn').textContent = 'Update';
   } else {
@@ -18168,10 +18303,15 @@ function openSchedModal(editId) {
     document.getElementById('sched-expr').value = '';
     document.getElementById('sched-type').value = 'once';
     document.getElementById('sched-run-at').value = new Date(Date.now() + 3600000).toISOString().slice(0,16);
+    document.getElementById('sched-watch').checked = false;
+    document.getElementById('sched-done-pattern').value = '';
+    document.getElementById('sched-done-action').value = 'disable';
+    document.getElementById('sched-watch-timeout').value = 120;
     document.getElementById('sched-save-btn').textContent = 'Save';
   }
   updateSchedTypeUI();
   updateSchedRecUI();
+  updateSchedWatchUI();
   overlay.style.display = 'flex';
   requestAnimationFrame(() => overlay.classList.add('active'));
   setTimeout(() => document.getElementById('sched-title').focus(), 50);
@@ -18205,8 +18345,13 @@ async function saveSchedModal() {
     }
   }
   const schedExpr = document.getElementById('sched-expr').value.trim();
+  const watch = document.getElementById('sched-watch').checked ? 1 : 0;
+  const donePattern = document.getElementById('sched-done-pattern').value.trim();
+  const doneAction = document.getElementById('sched-done-action').value;
+  const watchTimeout = parseInt(document.getElementById('sched-watch-timeout').value) || 120;
   const payload = { title, session, command, sched_type: stype, recurrence: recurrence || null, run_at,
-                    schedule_expr: schedExpr || null };
+                    schedule_expr: schedExpr || null,
+                    watch, done_pattern: donePattern || null, done_action: doneAction, watch_timeout: watchTimeout };
   const url = _schedEditId ? API + '/api/schedules/' + _schedEditId : API + '/api/schedules';
   const method = _schedEditId ? 'PATCH' : 'POST';
   const r = await apiCall(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
@@ -27020,6 +27165,10 @@ class CCHandler(BaseHTTPRequestHandler):
                     "run_at": run_at, "next_run": run_at,
                     "last_run": None, "enabled": 1, "run_count": 0,
                     "schedule_expr": schedule_expr or None,
+                    "watch": int(data.get("watch") or 0),
+                    "watch_timeout": int(data.get("watch_timeout") or 120),
+                    "done_pattern": data.get("done_pattern") or None,
+                    "done_action": data.get("done_action") or "disable",
                     "created": now_ts, "updated": now_ts, "deleted": None,
                 }
                 # compute next_run — prefer schedule_expr if provided
@@ -27031,12 +27180,16 @@ class CCHandler(BaseHTTPRequestHandler):
                     sched["next_run"] = _next_run_dt(sched) or run_at
                 db.execute(
                     """INSERT INTO schedules (id,title,session,command,sched_type,recurrence,
-                       run_at,next_run,last_run,enabled,run_count,schedule_expr,created,updated,deleted)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       run_at,next_run,last_run,enabled,run_count,schedule_expr,
+                       watch,watch_timeout,done_pattern,done_action,
+                       created,updated,deleted)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (sched["id"], sched["title"], sched["session"], sched["command"],
                      sched["sched_type"], sched["recurrence"], sched["run_at"],
                      sched["next_run"], sched["last_run"], sched["enabled"],
                      sched["run_count"], sched["schedule_expr"],
+                     sched["watch"], sched["watch_timeout"],
+                     sched["done_pattern"], sched["done_action"],
                      sched["created"], sched["updated"], sched["deleted"])
                 )
                 db.commit()
@@ -27092,7 +27245,8 @@ class CCHandler(BaseHTTPRequestHandler):
                 cols = _sched_cols(db)
                 sched = _sched_row_to_dict(row, cols)
                 body = self._read_body()
-                for k in ("title","session","command","sched_type","recurrence","run_at","enabled","schedule_expr"):
+                for k in ("title","session","command","sched_type","recurrence","run_at","enabled","schedule_expr",
+                          "watch","watch_timeout","done_pattern","done_action"):
                     if k in body:
                         sched[k] = body[k]
                 expr = (sched.get("schedule_expr") or "").strip()
@@ -27104,10 +27258,15 @@ class CCHandler(BaseHTTPRequestHandler):
                 sched["updated"] = int(_time.time())
                 db.execute(
                     """UPDATE schedules SET title=?,session=?,command=?,sched_type=?,recurrence=?,
-                       run_at=?,next_run=?,enabled=?,schedule_expr=?,updated=? WHERE id=?""",
+                       run_at=?,next_run=?,enabled=?,schedule_expr=?,
+                       watch=?,watch_timeout=?,done_pattern=?,done_action=?,
+                       updated=? WHERE id=?""",
                     (sched["title"], sched["session"], sched["command"], sched["sched_type"],
                      sched["recurrence"], sched["run_at"], sched["next_run"],
-                     sched["enabled"], sched.get("schedule_expr"), sched["updated"], sched_id)
+                     sched["enabled"], sched.get("schedule_expr"),
+                     int(sched.get("watch") or 0), int(sched.get("watch_timeout") or 120),
+                     sched.get("done_pattern"), sched.get("done_action") or "disable",
+                     sched["updated"], sched_id)
                 )
                 db.commit()
                 self._json(sched)
